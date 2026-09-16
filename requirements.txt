@@ -1,0 +1,8 @@
+httpx
+pandas
+openpyxl
+xlrd
+py7zr
+odfpy
+matplotlib
+numpy
