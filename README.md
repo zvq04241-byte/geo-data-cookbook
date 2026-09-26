@@ -1,21 +1,11 @@
 # geo-data-cookbook
 
-**41 reproducible recipes for pulling public statistics and turning them into figures.**
+**Public statistics go wrong quietly.** The request succeeds, the numbers look
+plausible, and the figure is already printed before anyone notices.
 
-Each recipe is a pair:
-
-- `recipe.md` — where the data lives, what the fields mean, and a **ハマり所
-  (gotcha) section**: the traps actually hit while building it, with the wrong
-  numbers they produce.
-- `fetch.py` — a standalone CLI. No shared library, no framework. Copy one
-  directory and it runs.
-
-The recipes are written in Japanese. The code and the API details are not.
-
-## Why this exists
-
-Client libraries for statistical APIs are common. What is not written down
-anywhere is **what goes wrong**. A few examples from this repository:
+Client libraries for statistical APIs are common. **What goes wrong is not
+written down anywhere.** This repository is that missing half — 168 traps
+across 41 data sources, each with the wrong number it produces.
 
 - FAOSTAT's `China` is not China. It is mainland China + Taiwan + Hong Kong +
   Macao. Use it alongside `China, mainland` and you count the same production
@@ -35,6 +25,65 @@ There are **268 such notes** across the 41 recipes.
 [`PITFALLS.md`](PITFALLS.md) groups the ones that recur across unrelated
 sources into 10 families — read it before writing against a source that has no
 recipe here yet.
+
+
+## Point your coding agent at it
+
+**This repository is written for AI agents as much as for people.**
+
+`AGENTS.md` at the root is an index of all 254 traps — 5,000 tokens, small
+enough to sit in an agent's context. Most AI CLIs (Codex, Claude Code, Cursor,
+Gemini CLI, Copilot CLI, Antigravity) read a root `AGENTS.md` automatically.
+
+```bash
+git clone https://github.com/zvq04241-byte/geo-data-cookbook
+cd geo-data-cookbook          # or place it beside your own project
+codex   # claude / agy / copilot — any of them
+```
+
+Then ask for what you actually want:
+
+```
+FAOSTAT から 2023年の米の生産量 上位5か国を出す Python を書いてください。
+```
+
+The agent reads the index, opens the one recipe that matches, and writes the
+aggregate-region exclusion without being told:
+
+```python
+# 国ではない集計地域。完全一致で除外する（表記が変わると漏れる）。
+# China は mainland+Taiwan+HK+Macao の合計なので、教材では China, mainland を残す。
+AGG_AREAS = {"World", "Africa", "Asia", ...}
+```
+
+That is the point of the repository. **The traps are knowledge no model has;
+the code is knowledge every model has.**
+
+## What this is
+
+**41 reproducible recipes for pulling public statistics and turning them into figures.**
+
+Each recipe is a pair:
+
+- `recipe.md` — where the data lives, what the fields mean, and a **ハマり所
+  (gotcha) section**: the traps actually hit while building it, with the wrong
+  numbers they produce.
+- `fetch.py` — a standalone CLI. No shared library, no framework. Copy one
+  directory and it runs.
+
+The recipes are written in Japanese. The code and the API details are not.
+
+## Found a trap we don't have?
+
+**Please open an issue — the trap alone is enough. No code required.**
+
+Three lines is a complete report:
+
+- what you asked the API for
+- what you got instead
+- the wrong number it produced
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Japanese or English, either is fine.
 
 ## Sources covered
 
