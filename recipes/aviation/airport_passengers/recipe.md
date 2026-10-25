@@ -8,7 +8,7 @@ summary: 空港別統計は国ごとに別系統しかない。欧州=Eurostat a
 verified_at: 2026-09-15
 complexity: medium
 auth_required: true   # e-Stat 側のみ ESTAT_APP_ID
-gotcha_count: 11
+gotcha_count: 12
 ---
 
 # aviation / airport_passengers
@@ -164,3 +164,5 @@ $where=origin_airport_code='ATL' AND year='2024'
    A列には地方名（Region I・CAR・NCR）と `Total` 行も混じるので、空港名と区別する。
 11. **MIAA の PDF はファイル名に更新日が入る**（`20260708_Total_Statistics.pdf`）。
    URL を決め打ちにすると次の更新で404。一覧ページから `*_Total_Statistics.pdf` を拾う。
+12. **国ごとの航空旅客に WDI（`IS.AIR.PSGR`）を使わない**（2026-10-21）。航空会社の登録国で数えた値で、
+   空港の利用者ではない（アイルランドが3位に出た）。国の航空・ハブ空港の話は、このレシピの空港別の値で組む。

@@ -1,4 +1,4 @@
-"""fetch.py — 市区町村境界（国土数値情報 N03, 都道府県単位）
+"""fetch.py ― 市区町村境界（国土数値情報 N03, 都道府県単位）
 
 国土数値情報 行政区域データ N03 から指定都道府県の市区町村ポリゴンを取得し、
 muni_code で dissolve した GeoPackage を出力する。検証用に「面積ランキング CSV」も併産。
@@ -103,7 +103,7 @@ def load_municipalities(zip_bytes: bytes, url: str):
 
 
 def write_manifest(muni, csv_path: Path) -> int:
-    """市区町村を面積(km²)降順に並べたマニフェスト CSV を書く。"""
+    """市区町村を面積(平方km)降順に並べたマニフェスト CSV を書く。"""
     import csv as _csv
     area_km2 = muni.to_crs(EQUAL_AREA_CRS).geometry.area / 1e6
     recs = []
@@ -185,7 +185,7 @@ def main() -> int:
         "gpkg_sha256": sha256_of(gpkg),
         "csv_sha256": sha256_of(csv_path),
         "notes": ("N03 属性は cp932。N03_007=行政コードで dissolve。5桁数字でない行は除外。"
-                  "面積は EPSG:6933(equal-area)で算出した km²。"),
+                  "面積は EPSG:6933(equal-area)で算出した 平方km。"),
     }
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
                          encoding="utf-8")
@@ -193,11 +193,11 @@ def main() -> int:
 
     print(f"\n== N03 市区町村境界 {pref} ({args.year}) {n}市区町村 ==")
     print(f"  GPKG: {gpkg}")
-    print("  面積トップ5(km²):")
+    print("  面積トップ5(平方km):")
     import csv as _csv
     with open(csv_path, encoding="utf-8") as f:
         for r in list(_csv.DictReader(f))[:5]:
-            print(f"    {r['Rank']:>2}  {r['Area']:<10}  {r['Value']:>8} km²  {r['MuniCode']}")
+            print(f"    {r['Rank']:>2}  {r['Area']:<10}  {r['Value']:>8} 平方km  {r['MuniCode']}")
     return 0
 
 

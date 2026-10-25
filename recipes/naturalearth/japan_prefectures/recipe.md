@@ -8,7 +8,7 @@ items: [gpkg, manifest_csv]
 verified_at: 2026-06-08
 complexity: medium
 auth_required: false
-gotcha_count: 8
+gotcha_count: 9
 pattern: bulk-zip-shapefile + bbox-clip-territory-reassign + geopackage-output
 ---
 
@@ -73,6 +73,12 @@ NE 10m は南鳥島（東京都）を含むため、最東端マニフェスト�
 ### 8. 出力は GPKG（境界本体）＋検証用 CSV の二本立て
 境界の実体は GeoPackage。CSV は採点・点検用のマニフェスト（県別の経度緯度レンジ）。
 地図描画や統計結合は各プロジェクト側で GPKG を読んで行う（本レシピは境界供給に専念）。
+
+### 9. 範囲の検査は北方領土だけでは足りない（2026-10-19）
+作図の側（`lib.japan_map`）で、北方領土を守る東経150°の範囲だけを見ていたら、
+**鹿児島県（奄美群島・トカラ列島・種子島・屋久島の南端）と長崎県（五島列島）が図の外に切れていた。**
+1か所を守る規則は、隣の同じ型の抜けを見逃す。いまは `lib.japan_map` が既定で東経150°まで取り、
+**全都道府県が範囲に入るか**を検査して、切れれば止める。都道府県図はこのレシピの境界を直接描かず、`lib.japan_map` を使う。
 
 ## 効くケース
 - 都道府県コロプレス地図のベース境界（北方領土込み）

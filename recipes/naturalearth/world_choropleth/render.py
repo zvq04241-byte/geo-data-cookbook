@@ -194,7 +194,7 @@ def main():
     unmatched = sorted(set(df["_key"]) - matched)
     print(f"結合: {len(matched)}/{len(df)} 一致")
     if unmatched:
-        print(f"⚠️  地図に未結合のコード: {unmatched}")
+        print(f"★  地図に未結合のコード: {unmatched}")
 
     # === 投影（既定=正方形図法＝再投影なし / laea・cea は to_crs で再投影）===
     w, e, s, north = args.bbox
@@ -320,9 +320,9 @@ def main():
         subprocess.run(["inkscape", str(svg), "-o", str(pdf)],
                        check=True, capture_output=True, timeout=60)
         pdf_method = "inkscape(svg)"
-        print(f"✅ PDF (Inkscape): {pdf}")
+        print(f"○ PDF (Inkscape): {pdf}")
     except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as ex:
-        print(f"⚠️  Inkscape 変換不可（{type(ex).__name__}）。PDFは未生成（SVGを使用してください）。")
+        print(f"★  Inkscape 変換不可（{type(ex).__name__}）。PDFは未生成（SVGを使用してください）。")
 
     # === metadata ===
     meta = {
@@ -347,9 +347,9 @@ def main():
     meta_path = out_dir / f"{base}_metadata.json"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"✅ PNG: {png}")
-    print(f"✅ SVG: {svg}")
-    print(f"✅ META: {meta_path}")
+    print(f"○ PNG: {png}")
+    print(f"○ SVG: {svg}")
+    print(f"○ META: {meta_path}")
     print(f"分類境界: {[round(float(b),1) for b in breaks]}  階級数={n}")
 
 
@@ -357,5 +357,5 @@ if __name__ == "__main__":
     try:
         main()
     except RenderError as e:
-        print(f"❌ {e.kind}: {e}", file=sys.stderr)
+        print(f"× {e.kind}: {e}", file=sys.stderr)
         sys.exit(1)

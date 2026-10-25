@@ -1,4 +1,4 @@
-"""fetch.py — UN Comtrade 貿易相手国ランキング取得
+"""fetch.py ― UN Comtrade 貿易相手国ランキング取得
 
 UN Comtrade Public Preview API から、指定国の特定HS品目について、
 貿易相手国の上位N国を取得して CSV + metadata.json に保存する。
@@ -179,7 +179,7 @@ def reverse_lookup_imports(
     輸入統計が打ち切られても、相手国側の輸出統計から相手国ランキングを復元できる。
 
     Returns:
-        (df, world_val_reverse) — df は aggregate_by_partner と同じ列構成
+        (df, world_val_reverse) ― df は aggregate_by_partner と同じ列構成
     """
     reporter_int = int(reporter)
     targets = [e for e in MAJOR_EXPORTERS if e != reporter_int]
@@ -398,7 +398,7 @@ def main() -> int:
     # qtyUnitAbbr 列で確認すること。下記は USD 表示のみ
     if world_total["value_usd"] > 0:
         print(f"  合計: ${world_total['value_usd']/1e6:,.0f}百万USD  "
-              f"(qty raw: {world_total['qty']:,.0f} — 単位はAPI仕様参照)")
+              f"(qty raw: {world_total['qty']:,.0f} ― 単位はAPI仕様参照)")
     print()
     for _, row in df.iterrows():
         name = row["partner_jp"] or row["partner_desc"]
@@ -410,7 +410,7 @@ def main() -> int:
     if used_reverse:
         print("\n  ※ 逆引き集計（相手国の輸出データから復元）を使用。500件打ち切りを回避。")
     elif truncated:
-        print("\n  ⚠ APIが500件で打ち切られています。--reverse on で逆引き集計できます。")
+        print("\n  ★ APIが500件で打ち切られています。--reverse on で逆引き集計できます。")
     return 0
 
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""fetch.py — JNTO「年別 訪日外客数・出国日本人数の推移」を1964年から取得。
+"""fetch.py ― JNTO「年別 訪日外客数・出国日本人数の推移」を1964年から取得。
 
 出典: 日本政府観光局(JNTO) の公開PDF「年別 訪日外客数、出国日本人数の推移(1964年-)」。
 ★『世界国勢図会』など二次資料は近年だけのことが多いが、JNTO原典は**1964年まで**揃う。
@@ -83,7 +83,7 @@ def main():
     tmp.unlink(missing_ok=True)
     cross = [y for (y, a, o), (_, a2, o2) in zip(rows, rows[1:]) if (a > o) != (a2 > o2)]
     print(f"saved: {out.name}  ({rows[0][0]}-{rows[-1][0]}, {len(rows)}行)")
-    print(f"訪日↔出国の逆転年: {cross}  （1971=出国超え, 2015=訪日超え が要所）")
+    print(f"訪日⇔出国の逆転年: {cross}  （1971=出国超え, 2015=訪日超え が要所）")
 
 
 if __name__ == "__main__":

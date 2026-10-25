@@ -4,8 +4,8 @@
 plausible, and the figure is already printed before anyone notices.
 
 Client libraries for statistical APIs are common. **What goes wrong is not
-written down anywhere.** This repository is that missing half — 168 traps
-across 41 data sources, each with the wrong number it produces.
+written down anywhere.** This repository is that missing half — 318 traps
+across 48 recipes, each with the wrong number it produces.
 
 - FAOSTAT's `China` is not China. It is mainland China + Taiwan + Hong Kong +
   Macao. Use it alongside `China, mainland` and you count the same production
@@ -21,7 +21,7 @@ across 41 data sources, each with the wrong number it produces.
   The M49 codes return zero rows for every year — silently.
   (`recipes/comtrade/region_trade_matrix`)
 
-There are **268 such notes** across the 41 recipes.
+There are **318 such notes** across the 48 recipes.
 [`PITFALLS.md`](PITFALLS.md) groups the ones that recur across unrelated
 sources into 10 families — read it before writing against a source that has no
 recipe here yet.
@@ -31,12 +31,12 @@ recipe here yet.
 
 **This repository is written for AI agents as much as for people.**
 
-`AGENTS.md` at the root is an index of all 254 traps — 5,000 tokens, small
+`AGENTS.md` at the root is an index of all 318 traps, small
 enough to sit in an agent's context. Most AI CLIs (Codex, Claude Code, Cursor,
 Gemini CLI, Copilot CLI, Antigravity) read a root `AGENTS.md` automatically.
 
 ```bash
-git clone https://github.com/zvq04241-byte/geo-data-cookbook
+git clone <this repository>      # the URL on this page
 cd geo-data-cookbook          # or place it beside your own project
 codex   # claude / agy / copilot — any of them
 ```
@@ -61,7 +61,7 @@ the code is knowledge every model has.**
 
 ## What this is
 
-**41 reproducible recipes for pulling public statistics and turning them into figures.**
+**48 reproducible recipes for pulling public statistics and turning them into figures.**
 
 Each recipe is a pair:
 
@@ -91,10 +91,14 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Japanese or English, either is fine.
 - **aviation** — airport_passengers
 - **cams** — dust_aod_map
 - **comtrade** — mutual_flow_diagram, region_trade_matrix, trade_ranking
-- **estat** — calc_social, census_age_sex_municipality, commerce_sales_prefecture, keizai_census_industry, manufacturing_shipment_prefecture, prefecture_classify
+- **estat** — calc_social, census_age_sex_municipality, census_small_area, commerce_sales_prefecture, keizai_census_industry, manufacturing_shipment_prefecture, population_natural_change_prefecture, prefecture_classify
+- **eu_budget** — spending_revenue
 - **eurostat** — air_flow, trade_by_transport_mode
 - **faostat** — crops_ranking
-- **gsi_dem** — relief_map, route_section
+- **figure** — flow_map
+- **gsi_dem** — backwater_pond, relief_map, route_section
+- **gsi_photo** — old_new_pair
+- **gsi_vector** — building_count
 - **hydrosheds** — world_basin_erosion_map
 - **iea** — electricity_generation
 - **ilo** — employment_by_activity, wages_ranking

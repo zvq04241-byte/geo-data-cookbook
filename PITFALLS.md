@@ -1,6 +1,6 @@
 # 出所を問わず効く罠
 
-43本のレシピに **278件**のハマり所が書いてある。だがそれは、そのレシピを
+54本のレシピに **331件**のハマり所が書いてある。だがそれは、そのレシピを
 開かないと出てこない。**新しい出所に当たる前に読むもの**がここにある。
 
 選んだ基準は「**3つ以上の別々の出所で、同じ形で踏んだもの**」。
@@ -13,7 +13,7 @@
 
 ## 1. 合計行が明細と同居している ★最多
 
-**いちばん多い。19本のレシピで踏んでいる。** 明細の行と、その合計の行が、
+**いちばん多い。21本のレシピで踏んでいる。** 明細の行と、その合計の行が、
 同じ列・同じ形で返ってくる。素朴に全部足すと**倍前後に膨らむ**。
 
 膨らみ方が「2倍ちょうど」なら気づくが、**一部の行だけ合計が在る**ことが多いので、
@@ -25,6 +25,7 @@
 | `tra_cov` 未指定で Total／国内／国際／域内／域外が同時に返る | [aviation/airport_passengers](recipes/aviation/airport_passengers/recipe.md) |
 | `partnerCode=0` は World（相手国ではない） | [comtrade/trade_ranking](recipes/comtrade/trade_ranking/recipe.md) [comtrade/region_trade_matrix](recipes/comtrade/region_trade_matrix/recipe.md) |
 | `China` = 中国本土＋台湾＋香港＋マカオの**合計**。`China, mainland` と重複 | [faostat/crops_ranking](recipes/faostat/crops_ranking/recipe.md) |
+| 貿易の `China (excluding intra-trade)`(265)・EU の excluding intra-trade もコード5000未満で国に紛れる | [faostat/crops_ranking](recipes/faostat/crops_ranking/recipe.md) |
 | `LocTypeID` で国(4)・地域(2)・サブ地域(3)が同じ表に | [un_wpp/population_ranking](recipes/un_wpp/population_ranking/recipe.md) |
 | `WLD` `EUU` も国コードとして返る | [world_bank/country_indicator](recipes/world_bank/country_indicator/recipe.md) [aquastat/water_resources](recipes/aquastat/water_resources/recipe.md) |
 | 政令市の「市計」と「区」が併存 | [estat/manufacturing_shipment_prefecture](recipes/estat/manufacturing_shipment_prefecture/recipe.md) |
@@ -33,6 +34,8 @@
 | 報告国「内」は sum・報告国「間」は max（両方 sum で二重計上） | [eurostat/air_flow](recipes/eurostat/air_flow/recipe.md) |
 | `European Union (15)` 行は UK を含む | [worldsteel/crude_steel](recipes/worldsteel/crude_steel/recipe.md) [oica/vehicle_production](recipes/oica/vehicle_production/recipe.md) |
 | 「総額」「旅行のみ」「旅客輸送のみ」が同じ表に | [unwto/tourism_statistics](recipes/unwto/tourism_statistics/recipe.md) |
+| `EU-27`（年により EU-15/25/28）の列が加盟国の列と並ぶ | [eu_budget/spending_revenue](recipes/eu_budget/spending_revenue/recipe.md) |
+| 町丁の「総数・男・女」3行と、レベル3（丁目の計）がレベル4と並ぶ。ただし秘匿の合算先になったレベル3は捨てられない | [estat/census_small_area](recipes/estat/census_small_area/recipe.md) |
 
 **気づき方。** 合計が分かっている値（世界計・全国計）と突き合わせる。
 それが無いときは、**桁で殴られる実例**を1件用意する。ポルトガルの航空貨物が
@@ -41,7 +44,7 @@
 
 ## 2. 「200 が返った」も「行が在る」も、データが在る証拠ではない
 
-**6本で踏んでいる。** エラーにならないので、**黙って0や欠落のまま先へ進む**。
+**7本で踏んでいる。** エラーにならないので、**黙って0や欠落のまま先へ進む**。
 404 より危ない。
 
 | 形 | 出所 |
@@ -52,6 +55,7 @@
 | `page=0 / total=0` を返す国がある | [world_bank/country_indicator](recipes/world_bank/country_indicator/recipe.md)（TWN） |
 | 新しい分類だけ見ていると古い年が0件 | [ilo/employment_by_activity](recipes/ilo/employment_by_activity/recipe.md)（ISIC Rev.4 のみ見る） |
 | コードが違うと全年0件 | [comtrade/region_trade_matrix](recipes/comtrade/region_trade_matrix/recipe.md)（India=699, France=251） |
+| 合計の行（`TOTAL REVENUE`）は在るのに、国の列が空 | [eu_budget/spending_revenue](recipes/eu_budget/spending_revenue/recipe.md)（国別の支払額は `TOTAL own resources`） |
 
 **気づき方。** 0件・空配列を見たら、**結論を出す前に一巡する**。
 別コード・別系統・別版・言い換え。0件は「無い」ではなく「この引き方では出ない」。
@@ -93,7 +97,7 @@
 
 ## 6. 同じ名前の指標に、複数の定義がある
 
-**8本。** どちらも正しい値なので、検算では捕まらない。**混ぜたときだけ**段差が出る。
+**10本。** どちらも正しい値なので、検算では捕まらない。**混ぜたときだけ**段差が出る。
 
 | 取り違え | 出所 |
 |---|---|
@@ -104,14 +108,17 @@
 | gross発電 と 分散型太陽光推計込み | [iea/electricity_generation](recipes/iea/electricity_generation/recipe.md) |
 | 出発便のみ と 到着＋出発 | [aviation/airport_passengers](recipes/aviation/airport_passengers/recipe.md)（BTS と Eurostat を並べると米国だけ半分） |
 | 「その国から運ばれた量」と「その国籍が運んだ量」 | [transport/roro_and_road_freight](recipes/transport/roro_and_road_freight/recipe.md)（Eurostat `road_go_ia_lgtt` の `geo`） |
+| 「その国の空港の利用者」と「その国に登録した航空会社の旅客」 | [world_bank/country_indicator](recipes/world_bank/country_indicator/recipe.md)（WDI `IS.AIR.PSGR`。アイルランドが3位に出る） |
 | 総流域面積 と 有効流域面積 | [hydrosheds/world_basin_erosion_map](recipes/hydrosheds/world_basin_erosion_map/recipe.md) |
+| 人口推計の自然増減（前年10月～当年9月・総人口）と 人口動態統計（暦年・日本人） | [estat/population_natural_change_prefecture](recipes/estat/population_natural_change_prefecture/recipe.md) |
+| 「電気機械」＝中分類29だけか、電子部品(28)・情報通信機械(30)を含むか（人数が倍違う） | [estat/manufacturing_shipment_prefecture](recipes/estat/manufacturing_shipment_prefecture/recipe.md) |
 
 **原則。** 出所をまたいで並べるなら、**どちらかに統一する**。
 統一できないなら、図の注記に定義差を書く。
 
 ## 7. コード体系は年で変わる
 
-**6本。** 去年動いたコードが今年は別のものを指す。あるいは空を返す。
+**9本。** 去年動いたコードが今年は別のものを指す。あるいは空を返す。
 
 - 調査年で分類の番号が入れ替わる … [estat/census_age_sex_municipality](recipes/estat/census_age_sex_municipality/recipe.md)（2015と2020で男女/年齢の cat が逆）
 - 新旧の分類が同居し、古い年は旧版しかない … [ilo/employment_by_activity](recipes/ilo/employment_by_activity/recipe.md)（ISIC Rev.3 / Rev.4）
@@ -119,6 +126,9 @@
 - **その年の定義で集計されている** … [eurostat/trade_by_transport_mode](recipes/eurostat/trade_by_transport_mode/recipe.md)（英国は2019年のファイルに1行も無い＝当時は域内）
 - ファイル名（＝対象範囲）が版で変わる … [faostat/crops_ranking](recipes/faostat/crops_ranking/recipe.md)（Crops → Crops_Livestock）
 - 解体・統合した国のコード … [world_bank/country_indicator](recipes/world_bank/country_indicator/recipe.md)（USSR / Yugoslavia / 東西ドイツ）
+- 加盟国の範囲が年で変わる … [eu_budget/spending_revenue](recipes/eu_budget/spending_revenue/recipe.md)（加盟前の国にも列があり、足すとEU集計を超える）
+- 前の年の実績は前の調査の表にしか無い … [estat/manufacturing_shipment_prefecture](recipes/estat/manufacturing_shipment_prefecture/recipe.md)（市区町村の表は最新年だけ）
+- 国勢調査の基準ごとに別の表になり、同じ期間でも値が違う … [estat/population_natural_change_prefecture](recipes/estat/population_natural_change_prefecture/recipe.md)
 
 **原則。** 「古い年が引けない」ではなく「**古い年はその年の定義で引く**」。
 過去問に合わせるときだけ、新しい年を旧定義に寄せる。

@@ -10,7 +10,7 @@ complexity: easy
 auth_required: false
 data_size_mb: 65  # 圧縮ZIP
 expanded_size_mb: 300  # 展開CSV
-gotcha_count: 6
+gotcha_count: 7
 experiment_validated: true  # Phase 0.5 で cookbook 効果を実証したリファレンスレシピ
 ---
 
@@ -91,6 +91,11 @@ Area 列に国名と集計地域が混在する。ランキング前に必ず除
 - `European Union (27)` / `European Union (28)` — 加盟国数で複数表記
 - `Belgium-Luxembourg` / `USSR` / `Yugoslav SFR` 等 — 古い年データに残る歴史的アグリゲート
 
+- **貿易（TCL）の `China (excluding intra-trade)`（265）と EU12/15/25/27 の excluding intra-trade（261/266/268/269）**（2026-10-20 追記）。
+  コードが5000未満なので「5000以上は集計」の規則では落ちない。これを国として足すと中国を二重に数える
+  （授業ライブ作図の事実確認で、中国の大豆輸入の割合を37%と誤った。正しくは60%）。
+  保管庫経由なら `lib.bulk_data.read_faostat` の既定（`FAOSTAT_AGGREGATE_AREAS`）で落ちる。**国はコードで選ぶ**（中国は41）
+
 実測例（2026-05-18 検証時の Wheat 2023）:
 - 修正前トップ10には `China` と `China, mainland` が重複、`Australia and New Zealand`・`LLDCs` が混入
 - 修正後は China, mainland → India → Russia → USA → France → Canada → Pakistan → Australia → Türkiye → Ukraine の妥当な結果
@@ -116,6 +121,10 @@ ZIP 内には本体 CSV 以外に Flag/AreaCode/ItemCode/Element 等のメタCSV
 - 〜2021年頃: `Production_Crops_E_All_Data_(Normalized)`（作物のみ）
 - 2022年〜: `Production_Crops_Livestock_E_All_Data_(Normalized)`（畜産統合）
 古い記事を参考にする時は注意。
+
+### 7. 推計・補完の値（Flag E / I）に印を付ける（2026-10-20）
+`Flag` 列の **E**（推計）と **I**（補完）は、各国の公表値ではない。図・表に出すときは値に＊を付け、
+「＊は FAO の推計値」と注記する。上位N の境目に推計値が来るときは、順位の結論を強めない。
 
 ## 効くケース
 - 単一作物 × 単一年 × 国別上位N
