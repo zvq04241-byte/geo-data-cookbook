@@ -40,7 +40,7 @@ python fetch.py --year 2022 --output-dir ./output   # 地域は REGIONS を編�
   **「他コードに含む」**は含む側の国が REGIONS にあり、references/comtrade_partner_notes.csv の partnerNote に名前があるもの
   （例: Comtrade 251 の注記 "France, Monaco"、757 "Switzerland, Liechtenstein"、579 "Norway, Svalbard and Jan Mayen"）。
   外した件数と名前は標準出力と metadata の `scope`・`coverage` に出る（既定では14件＝非独立11・他コードに含む3）。
-- M49 の表は sha256・行数で版を確かめる（`M49_SHA256`。出典は references/m49_overview.README.md）。
+- M49 の表は sha256・行数で版を確かめる（`M49_SHA256`。出典は references/README.md）。
 - 壊した入力で止まることを確かめた記録（2026-10-26）: アフリカのキーを消す／ナイジェリアを2回書く／エジプトをヨーロッパにも入れる／
   ナイジェリアを「データが少ない」「非独立」「他コードに含む」で外す／イランを南アジアに残す → いずれも止まる。
 

@@ -59,7 +59,7 @@ def load_regions():
             elif r["Sub-region Name"] == "Western Asia":
                 reg[iso] = "West Asia"
             else:
-                reg[iso] = None            # M49 にあるが3地域の外（例 US, CN, RU は欧州）
+                reg[iso] = None            # M49 にあるが3地域の外（例 US, CN。RU は M49 で欧州なので上で Europe になる）
     for iso, (r, _) in MOVED.items():
         reg[iso] = r
     return reg

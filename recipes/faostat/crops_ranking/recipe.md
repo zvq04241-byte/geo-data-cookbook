@@ -38,7 +38,7 @@ experiment_validated: true  # Phase 0.5 で cookbook 効果を実証したリフ
 特に効いた知見：
 - §2「集計地域の混入」の `China` = `China, mainland + Taiwan + HK + Macao` の合計だという指摘
 - `Australia and New Zealand`、`LLDCs`（末尾s）等の見落としやすい地理集計
-- 古い歴史的アグリゲート（USSR, Yugoslav SFR 等）も含めること
+- 古い歴史的アグリゲート（USSR, Yugoslav SFR 等）も含めること（当時の指摘。いまは解体前の国は落とさず、古い年の順位では残す。§2 参照）
 
 
 # faostat / crops_ranking

@@ -65,7 +65,7 @@ REGIONS = {
 M49_OF = {"アフリカ": ("Region Code", 2), "ヨーロッパ": ("Region Code", 150),
           "西アジア": ("Sub-region Code", 145), "南アジア": ("Sub-region Code", 34)}
 MOVED = {364: ("南アジア", "西アジア")}   # イラン: M49 は南アジア。日本の地理の慣習で西アジアに入れる
-# M49 の表の版。表を差し替えたら references/m49_overview.README.md と一緒にここを書き換える。
+# M49 の表の版。表を差し替えたら references/README.md と一緒にここを書き換える。
 M49_SHA256 = "ccfd0a7b9b406b7b75bdfb4725af35adcca88e6102898401c46e29a796656037"
 M49_ROWS = 248
 # M49 にあるが REGIONS に入れないもの。理由は次の2種類だけ（それ以外は止まる）:

@@ -122,7 +122,7 @@ def main():
             "external_pct": round(ext_pct, 0) if ext_pct is not None else None,
             "dependency_ratio_pct_aquastat": round(dep, 1) if dep is not None else None,
             "population_million": round(pop / 1e6, 1) if pop else None,   # TRWR ÷ 1人当たり で逆算
-            "trwr_per_capita_m3": round(per_cap, 0) if per_cap else None,
+            "trwr_per_capita_m3": int(per_cap + 0.5) if per_cap else None,   # 四捨五入（round は偶数丸めで 1282.5→1282 になる）
             "year_trwr": trwr_o["TIME_PERIOD"], "year_irwr": irwr_o["TIME_PERIOD"],
             "year_per_capita": pcap_o["TIME_PERIOD"],
             "obs_status_trwr": trwr_o.get("OBS_STATUS"),

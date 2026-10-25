@@ -341,6 +341,10 @@ def main() -> int:
     logging.info("生レコード: %d 件", len(raw_rows))
 
     extra: dict = {}
+    if args.mode == "trend":   # 推移でも、既定の国リストなら範囲を書く
+        extra["scope"] = {"all": "全部の国・地域（集計地域を含む応答をそのまま）",
+                          "given": f"指定した{len(countries)}か国の推移",
+                          "default": f"既定{len(DEFAULT_COUNTRIES)}か国の推移（全部の国ではない）"}[scope_kind]
     if args.mode == "ranking":
         try:
             agg_codes, n_economies, _u = fetch_aggregate_codes()

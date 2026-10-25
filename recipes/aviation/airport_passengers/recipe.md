@@ -56,7 +56,7 @@ freq . unit . tra_meas . rep_airp . schedule . tra_cov . time
 - `tra_meas=PAS_CRD` 旅客（到着＋出発）/ **`PAS_CRD_DEP` 出発のみ**・`PAS_CRD_ARR` 到着のみ /
   `FRM_LD_NLD` 貨物（`avia_gor`）
 - `tra_cov` … **`NAT`＝国内線 / `INTL`＝国際線**。さらに `INTL_IEU27_2020`（域内。**I が入る**）と
-  `INTL_XEU27_2020`（域外）に分かれる。2020年以前は `INTL_IEU28`／`INTL_XEU28`。「国内線と国際線」はここで取れる
+  `INTL_XEU27_2020`（域外）に分かれる。`INTL_IEU27_2020` は今の27か国の構成で2019年以前にもさかのぼって値がある（2015・2019年で確認）。英国を含む `INTL_IEU28`／`INTL_XEU28` は2019年まで（2023年は空）。「国内線と国際線」はここで取れる
   ★旧版は域内を `INTL_EU27_2020` と書いていた。存在しないコードでも HTTP 200・空で返るので、黙って落ちていた。
   `fetch.py` は空の区分を metadata の `notes`・`scope` に出し、200 以外は止まる
 - `schedule` … `TOTAL` / `SCHED`（定期）/ `NSCHED`（不定期）
