@@ -1,0 +1,20 @@
+# 気象庁 AMeDAS 平年値(1991-2020) 年平均気温 降順 — リファレンス値
+# fetch.py 既定（--metric mean_temp、全観測所）の CSV を採点。
+# 903 = 気温の年の値が RMK=8（正常値）の観測所数（2026-10-26 に ZIP を取得して測定。旧版は 905＝月の値に0が混じる2局を含んでいた）。
+# ZIP は版の差し替えがある（気象庁ページに「第5版の変更ファイル」）。差し替え後は数え直す。
+
+fetch_args: "--metric mean_temp"
+
+expected:
+  row_count: 903
+  # 年平均気温が最も高いのは南鳥島（亜熱帯）で決定的
+  top1_area: "南鳥島"
+  # 高温の南西諸島と最寒の富士山が含まれる（n=903=全件中に存在）
+  must_include_in_topN:
+    n: 903
+    areas: ["南鳥島", "石垣島", "富士山"]
+  # 年平均気温の妥当範囲（富士山 -5.9℃ 〜 南鳥島 25.8℃）。CRS/単位破損を検出
+  value_within_range:
+    Value: {min: -10, max: 30}
+  value_descending: true
+  unit: "°C"

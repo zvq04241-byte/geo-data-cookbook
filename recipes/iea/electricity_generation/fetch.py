@@ -19,6 +19,7 @@ import argparse
 import datetime
 import hashlib
 import json
+import re
 import sys
 import time
 import urllib.parse
@@ -37,19 +38,25 @@ DEFAULT_TTL_DAYS = 30
 # 網羅ではない。ここに無い国は IEA の表記を確認してから追加すること。
 KNOWN_CODES = {
     "USA", "CANADA", "MEXICO", "BRAZIL",
-    "FRANCE", "GERMANY", "ITALY", "SPAIN", "GBR", "NETHERLANDS",  # UK は ISO3 の GBR（UNITEDKINGDOM は無効→全世界が返る）
+    "FRANCE", "GERMANY", "ITALY", "SPAIN", "GBR", "NETHERLANDS",  # UK は GBR。UNITEDKINGDOM は無効→179か国＋WORLD の全件が返る（2026-10-26 実測）
     "DENMARK", "SWEDEN", "NORWAY", "FINLAND", "POLAND", "AUSTRIA", "SWITZERLAND",
     "JAPAN", "KOREA", "CHINA", "INDIA", "AUSTRALIA", "TURKEY",
 }
 
 # IEA flow コード → 出力列名（発電量・電源別）。EHINDPROD=総生産。
+# ★廃棄物は入れ子: EHWASTE(Waste 全体) ⊃ EHMUNWAST(Municipal waste) ⊃ EHMUNWASTR(同 renewable)。
 FLOWS = {
     "EHCOAL": "coal", "EHOIL": "oil", "EHNATGAS": "natgas",
     "EHNUCLEAR": "nuclear", "EHYDRO": "hydro", "EWIND": "wind",
-    "ESOLARPV": "solar", "EHBIOMASS": "biofuel", "EHGEOTHERM": "geothermal",
+    "ESOLARPV": "solar", "EHSOLARTH": "solar_thermal", "EHBIOMASS": "biofuel", "EHGEOTHERM": "geothermal",
     "ETIDE": "tide", "EHMUNWASTR": "munwaste_renew", "EHMUNWAST": "munwaste",
     "EHWASTE": "waste", "EHOTHER": "other_src", "EHINDPROD": "total",
 }
+# 総生産の恒等式に使う、重ならない電源の集合（廃棄物は EHWASTE だけを数える）。
+# 2026-10-26 実測（USA・GBR・DENMARK・JAPAN 1990–2025）で 合計/総生産 の差は最大 0.02%。
+IDENTITY_COLS = ["coal", "oil", "natgas", "nuclear", "hydro", "wind", "solar", "solar_thermal",
+                 "biofuel", "geothermal", "tide", "waste", "other_src"]
+IDENTITY_TOL = 0.01   # 総生産の1%（実測の差 0.02% に十分な余裕。ゴミ応答は桁で外れる）
 
 
 class DataFetchError(Exception):
@@ -57,7 +64,18 @@ class DataFetchError(Exception):
 
 
 def _cache_path(cache_dir: Path, code: str) -> Path:
+    if not re.fullmatch(r"[A-Z0-9]+", code):
+        raise DataFetchError(f"国コード '{code}' は英大文字・数字だけで書く（例 GERMANY, GBR）")
     return cache_dir / f"iea_ELECTRICITYANDHEAT_{code}.json"
+
+
+def _check_one_country(data: list, code: str) -> None:
+    """★不正な国コードは空でなく**全世界（179か国＋WORLD）**が返る（UNITEDKINGDOM・UNITEDSTATES・DEUTHERY で実測）。
+    応答の country 列が1種類でなければ落とす。"""
+    cs = {r.get("country") for r in data}
+    if len(cs) != 1:
+        raise DataFetchError(f"国コード '{code}' の応答に {len(cs)} か国が入っている（不正なコードで全件が返った）。"
+                             f"英国は GBR、米国は USA")
 
 
 def fetch_country_raw(code: str, cache_dir: Path, ttl_days: int, retries: int = 3) -> list:
@@ -69,8 +87,13 @@ def fetch_country_raw(code: str, cache_dir: Path, ttl_days: int, retries: int = 
     cp = _cache_path(cache_dir, code)
     if cp.exists():
         age_days = (time.time() - cp.stat().st_mtime) / 86400.0
-        if age_days <= ttl_days:
-            return json.loads(cp.read_text(encoding="utf-8"))
+        if 0 <= age_days <= ttl_days:          # mtime が未来（コピー等）なら期限切れ扱い
+            try:
+                data = json.loads(cp.read_text(encoding="utf-8"))
+                _check_one_country(data, code)
+                return data
+            except (json.JSONDecodeError, DataFetchError) as e:
+                print(f"[warn] キャッシュを使わず取り直す（{e}）", file=sys.stderr)
     url = BASE.format(code=urllib.parse.quote(code))
     last = None
     for attempt in range(1, retries + 1):
@@ -79,8 +102,11 @@ def fetch_country_raw(code: str, cache_dir: Path, ttl_days: int, retries: int = 
                 data = json.loads(r.read().decode("utf-8"))
             if not isinstance(data, list) or not data:
                 raise DataFetchError(f"空応答（国コード '{code}' が不正の可能性）")
+            _check_one_country(data, code)
             cp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             return data
+        except DataFetchError:
+            raise                                   # 不正なコードはリトライしても同じ
         except Exception as e:  # noqa
             last = e
             if attempt < retries:
@@ -88,9 +114,11 @@ def fetch_country_raw(code: str, cache_dir: Path, ttl_days: int, retries: int = 
     raise DataFetchError(f"{code}: 取得失敗 ({last})")
 
 
-def to_wide(raw: list, year_from: int, year_to: int) -> pd.DataFrame:
-    """raw JSON → 年 × 電源(TWh) のワイド表。product=ELECTR のみ。GWh→TWh。"""
+def to_wide(raw: list, year_from: int, year_to: int, stats: Optional[dict] = None) -> pd.DataFrame:
+    """raw JSON → 年 × 電源(TWh) のワイド表。product=ELECTR のみ。GWh→TWh。
+    ★欠損は空欄（NaN）のまま残す。0 で埋めない。stats に null の件数・応答に無い電源を記録する。"""
     rows = {}
+    n_null = 0
     for r in raw:
         if r.get("product") != "ELECTR":
             continue
@@ -99,6 +127,7 @@ def to_wide(raw: list, year_from: int, year_to: int) -> pd.DataFrame:
             continue
         v = r.get("value")
         if v is None:
+            n_null += 1
             continue
         y = int(r["year"])
         if y < year_from or y > year_to:
@@ -109,28 +138,33 @@ def to_wide(raw: list, year_from: int, year_to: int) -> pd.DataFrame:
     df = pd.DataFrame.from_dict(rows, orient="index").sort_index()
     df.index.name = "year"
     df = df.reset_index()
-    for c in FLOWS.values():
-        if c not in df.columns:
-            df[c] = 0.0
-    df = df.fillna(0.0)
+    absent = [c for c in FLOWS.values() if c not in df.columns]
+    for c in absent:
+        df[c] = float("nan")                 # 応答に行が無い電源。0 とは書かない
+    df = df[["year"] + list(FLOWS.values())]
+    # 行の無い電源がある年（太陽光の始まる前など。0 か欠損かは応答からは分からない）。最新年の欠けもここに出る
+    n_present = df[list(FLOWS.values())].notna().sum(axis=1)
+    incomplete = [int(y) for y, n in zip(df.year, n_present) if n < n_present.max()]
+    if stats is not None:
+        stats.update({"null_values_skipped": n_null, "flows_absent_in_response": absent,
+                      "years_with_fewer_flows": incomplete})
     _sanity_check(df)
     return df
 
 
 def _sanity_check(df: pd.DataFrame) -> None:
-    """正確性ガード: 不正な国コード等によるゴミ応答を検出して落とす。
-    総生産(EHINDPROD)に対し、電源内訳の合計が大きく超過していたら不整合（例: DEUTHERY 幻覚）。
-    smoke test（構造検査）は通っても中身が壊れている事故を防ぐ。"""
-    comp_cols = ["coal", "oil", "natgas", "nuclear", "hydro", "wind", "solar",
-                 "biofuel", "geothermal", "tide", "munwaste_renew"]
-    comp_sum = df[comp_cols].sum(axis=1)
-    bad = df[comp_sum > df["total"] * 1.10 + 1.0]  # 総生産を1割以上超過＝不整合
+    """正確性ガード（両側）: 重ならない電源の合計（IDENTITY_COLS）＝総生産(EHINDPROD) を年ごとに確かめる。
+    過大・過小のどちらに外れても落とす。総生産が無い年も落とす。"""
+    if df["total"].isna().any():
+        raise DataFetchError(f"総生産(EHINDPROD)が無い年がある: {df.year[df.total.isna()].tolist()}")
+    comp_sum = df[IDENTITY_COLS].sum(axis=1, skipna=True)
+    dev = (comp_sum - df["total"]).abs()
+    bad = df[dev > df["total"].abs() * IDENTITY_TOL + 0.01]
     if len(bad):
-        y = int(bad.iloc[0]["year"])
+        i = bad.index[0]
         raise DataFetchError(
-            f"整合性NG: 電源内訳の合計が総生産(EHINDPROD)を超過（{y}年: 内訳計"
-            f"{comp_sum[bad.index[0]]:.1f} > 総{bad.iloc[0]['total']:.1f} TWh）。"
-            f"国コードが不正な可能性（正しい大文字フルネームか確認。例 GERMANY を DEUTHERY 等に誤らない）。")
+            f"整合性NG: 電源の合計が総生産(EHINDPROD)と合わない（{int(df.year[i])}年: 合計"
+            f"{comp_sum[i]:.1f} / 総{df.total[i]:.1f} TWh、許容 {IDENTITY_TOL:.0%}）。")
 
 
 def fetch(code: str, year_from: int, year_to: int, out_dir: Path,
@@ -139,14 +173,15 @@ def fetch(code: str, year_from: int, year_to: int, out_dir: Path,
     if cache_dir is None:
         cache_dir = Path.home() / ".cache" / "iea"
     raw = fetch_country_raw(code, cache_dir, ttl_days)
-    df = to_wide(raw, year_from, year_to)
+    stats = {}
+    df = to_wide(raw, year_from, year_to, stats)
     y0, y1 = int(df.year.min()), int(df.year.max())
     date = datetime.datetime.now().strftime("%Y%m%d")
     slug = code.lower()
     csv_path = out_dir / f"{date}_iea_electricity_{slug}_{y0}_{y1}.csv"
     df.to_csv(csv_path, index=False, encoding="utf-8")
 
-    fossil = (df.coal + df.oil + df.natgas)
+    fossil = df[["coal", "oil", "natgas"]].sum(axis=1, min_count=1)
     meta = {
         "task_name": f"iea_electricity_{slug}_{y0}_{y1}",
         "source": {
@@ -156,20 +191,29 @@ def fetch(code: str, year_from: int, year_to: int, out_dir: Path,
             "access": "free data browser backend (= manual CSV download と同一データ)",
             "single_source": True,
         },
-        "query": {"country_code": code, "year_from": year_from, "year_to": year_to,
+        "query": {"country_code": code, "year_from": year_from, "year_to_requested": year_to,
                   "flows": list(FLOWS.keys())},
+        "scope": f"1か国（{code}）・{y0}–{y1}年（要求 {year_from}–{year_to}。実際にある年まで）",
         "units": "TWh (source GWh; 1 TWh = 10^9 kWh). gross production (EHINDPROD).",
         "fetched_at": datetime.datetime.now().astimezone().isoformat(),
         "csv_sha256": hashlib.sha256(csv_path.read_bytes()).hexdigest(),
         "row_count": int(len(df)),
         "year_range_actual": f"{y0}-{y1}",
-        "missing_value_treatment": "value=null は欠損として skip（0埋めしない）。総生産=EHINDPROD。",
+        "missing_value_treatment": "value=null は欠損として空欄（0埋めしない）。応答に行が無い電源も空欄。総生産=EHINDPROD。",
+        "missing_values": stats,
+        "verification": {"identity": "coal+oil+natgas+nuclear+hydro+wind+solar+solar_thermal+biofuel+geothermal+tide+waste+other_src = total",
+                         "tolerance": f"{IDENTITY_TOL:.0%} of total", "result": "OK（全年）"},
         "notes": "IEA一次データ単独。IEA無料APIプロダクト MES(api.iea.org/mes)は2010–月次のみ。"
-                 "1990–の年次はこのデータブラウザ経路で取得。gross（総生産）。最新確定年はおおむね当年-2。",
+                 "1990–の年次はこのデータブラウザ経路で取得。gross（総生産）。"
+                 "最新年は電源が欠けることがある（missing_values.years_with_fewer_flows）。"
+                 "廃棄物は入れ子（waste ⊃ munwaste ⊃ munwaste_renew）なので積み上げで重ねない。",
     }
     (out_dir / f"{csv_path.stem}_metadata.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"OK {code}: {y0}-{y1} ({len(df)}年) -> {csv_path.name}")
+    if stats["flows_absent_in_response"] or stats["years_with_fewer_flows"] or stats["null_values_skipped"]:
+        print(f"   空欄: 応答に無い電源 {stats['flows_absent_in_response']} / 電源が欠ける年 "
+              f"{stats['years_with_fewer_flows']} / null {stats['null_values_skipped']}件")
     print(f"   最新年 化石={fossil.iloc[-1]:.1f} 原子力={df.nuclear.iloc[-1]:.1f} "
           f"水力={df.hydro.iloc[-1]:.1f} 風力={df.wind.iloc[-1]:.1f} "
           f"太陽光={df.solar.iloc[-1]:.1f} 総={df.total.iloc[-1]:.1f} TWh")

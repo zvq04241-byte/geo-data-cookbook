@@ -4,7 +4,7 @@
 plausible, and the figure is already printed before anyone notices.
 
 Client libraries for statistical APIs are common. **What goes wrong is not
-written down anywhere.** This repository is that missing half — 318 traps
+written down anywhere.** This repository is that missing half — 344 traps
 across 48 recipes, each with the wrong number it produces.
 
 - FAOSTAT's `China` is not China. It is mainland China + Taiwan + Hong Kong +
@@ -21,7 +21,7 @@ across 48 recipes, each with the wrong number it produces.
   The M49 codes return zero rows for every year — silently.
   (`recipes/comtrade/region_trade_matrix`)
 
-There are **318 such notes** across the 48 recipes.
+There are **344 such notes** across the 48 recipes.
 [`PITFALLS.md`](PITFALLS.md) groups the ones that recur across unrelated
 sources into 10 families — read it before writing against a source that has no
 recipe here yet.
@@ -31,7 +31,7 @@ recipe here yet.
 
 **This repository is written for AI agents as much as for people.**
 
-`AGENTS.md` at the root is an index of all 318 traps, small
+`AGENTS.md` at the root is an index of all 344 traps, small
 enough to sit in an agent's context. Most AI CLIs (Codex, Claude Code, Cursor,
 Gemini CLI, Copilot CLI, Antigravity) read a root `AGENTS.md` automatically.
 

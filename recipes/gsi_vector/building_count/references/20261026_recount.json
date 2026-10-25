@@ -1,0 +1,13 @@
+{
+ "measured_at": "2026-10-26",
+ "source_project": "shisui_moritsuchi_p000（data/processed/20261005_buildings_town.json＝結合前の重心点、20261007_buildings_merged.json＝結合後。作成は scripts/make_buildings.py）",
+ "area": "bbox 140.235,35.685–140.325,35.770（千葉県北部・約8×9km）、z16 タイル340枚（data/raw/gsi_bvmap の .pbf 数）",
+ "raw_polygons": 61709,
+ "merged_polygons": 54329,
+ "old_centroid_points": 61635,
+ "inflation_old_vs_merged_pct": 13.4,
+ "inflation_raw_vs_merged_pct": 13.6,
+ "within_3m_of_tile_edge_pct": {"old_points_tile_width_496m_at_35.7N": 5.47, "merged_points_tile_width_496m": 2.58, "old_points_if_611m_equator_width": 4.51},
+ "z17_status": "experimental_bvmap/17/116604/51600.pbf → 404、z16 の同地点 → 200（1地点のみ）",
+ "notes": "recipe の旧記載『旧データ 61,630棟』は 61,635 の誤記。『境界から3m以内 4.59%』は再現しない（上の値）。『1タイル≒611m』は赤道での幅で、北緯35.7°では約496m"
+}

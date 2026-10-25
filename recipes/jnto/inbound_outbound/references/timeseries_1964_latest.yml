@@ -1,0 +1,20 @@
+# JNTO 訪日外客数・出国日本人数 1964–最新 長期時系列 — リファレンス値
+# fetch.py 既定（--output-dir のみ）の CSV を採点。列: year, visitor_arrivals, japanese_overseas。
+# ランキングでなく年次昇順の時系列。毎年1行増えるため row_count は下限で採点する。
+# 主目的: 桁スケール誤り(×1000/万人/千人換算ミス)・系列の欠落・列名取り違えの検出。
+#   2019 visitor_arrivals=31,882,049（コロナ前ピーク・確定値）、2024≈36,870,148（過去最多）。
+fetch_args: "--output-dir ./output"
+
+expected:
+  area_column: "year"
+  value_column: "visitor_arrivals"
+  # 1964〜最新で 60 行超。年次更新で増えるので下限採点。
+  row_count_min: 58
+  # 主要年（年列＝area_column）が時系列に含まれること＝期間の取りこぼし検出。
+  must_include_in_topN:
+    n: 200
+    areas: ["1964", "2019", "2024"]
+  # 桁スケールの妥当範囲。訪日は最大4千万人弱、出国は最大2千万人強（2019）。
+  value_within_range:
+    visitor_arrivals: {min: 0, max: 45000000}
+    japanese_overseas: {min: 0, max: 25000000}

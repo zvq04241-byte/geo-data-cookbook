@@ -5,10 +5,10 @@ task: 日本の都道府県境界（北方領土を北海道に統合）
 tags: [naturalearth, boundary, geopackage, japan, prefecture, choropleth-base, gis, hoppou, no-auth]
 summary: Natural Earth 10m admin-1 から47都道府県ポリゴンを取得し、北方4島をロシアから切り出して北海道に統合した GPKG を出力
 items: [gpkg, manifest_csv]
-verified_at: 2026-06-08
+verified_at: 2026-10-26
 complexity: medium
 auth_required: false
-gotcha_count: 9
+gotcha_count: 10
 pattern: bulk-zip-shapefile + bbox-clip-territory-reassign + geopackage-output
 ---
 
@@ -44,11 +44,16 @@ python fetch.py --output-dir ./output
 ### 1. 北方4島はロシア(サハリン州)ポリゴンに含まれる（最重要）
 Natural Earth では北方4島は **Japan でなく Russia の admin レコード**に入っている。
 そのまま `admin=='Japan'` を取ると北方領土が欠落する。
-**bbox `(145.0, 43.0, 149.5, 45.6)` で Russia ジオメトリから切り出し**、北海道に `unary_union` で統合する。
+**bbox `(145.0, 43.0, 149.5, 45.6)` に丸ごと入る Russia の島だけを取り**、北海道に `unary_union` で統合する。
+NE 10m 5.1.1 で bbox に掛かる admin-1 は Sakhalin の1件だけ、丸ごと入る島は **7面**（択捉・国後・色丹＋歯舞群島4面）。
+fetch.py は面数が 7 でなければ止まり、取った島の範囲を metadata の `hoppou` に書く（実測は `references/hoppou_measured.md`）。
 
-### 2. bbox 北限は 45.6°N（得撫島を除外）
-得撫島（ウルップ島, 45.7°N〜）は日本領でない。北限を **45.6°N** にして択捉島まで（得撫以北を除く）。
-東限 149.5°E は択捉島東端（≈148.8°E）を確実に含む余裕値。
+### 2. bbox で島を「切らない」（得撫島の切れ端が付く）
+得撫島（ウルップ島）は北方4島に含まれない。ところが NE 10m 5.1.1 の得撫島の南端は **149.437°E・45.584°N** で、
+北限 45.6°N の内側に入る。旧版は bbox で `intersection`（切り取り）していたため、**得撫島の切れ端が北海道に付き**、
+北海道の最東端が 149.5°E（bbox の東限そのもの）になっていた（2026-10-26 実測）。
+いまは bbox に**丸ごと入る島だけ**を取り、一部だけ掛かる島は外して metadata の `excluded_partial_bounds` に残す。
+択捉島は 148.856°E・45.528°N までで、bbox に丸ごと入る。
 
 ### 3. NE の name はマクロン付き
 join キーの NE `name` は **`Hokkaidō` / `Kyōto` / `Ōsaka` / `Hyōgo` / `Ōita` / `Kōchi`** など長音符付き。
@@ -60,11 +65,14 @@ GeoDataFrame のジオメトリ列に `gdf.at[i, 'geometry'] = ...` で直代入
 
 ### 5. 自己検証で北方領土欠落を機械検出
 `assert_hoppou()` が北海道の `total_bounds[2]`（max_lon）を見て **147.5°E 未満なら例外**。
-北方領土込みなら ≈148.8°E、根室どまりなら ≈145.8°E。これで「うっかり欠落」を CI 的に止める。
+NE 10m 5.1.1 の実測で、北方領土込みなら 148.856°E（択捉島東端）、統合前（根室どまり）は 145.825°E。これで「うっかり欠落」を止める。
+あわせて `assert_47()` が **47面・県名が47県名の集合と一致（欠け・重複・名前の取り違えなし）**を確かめ、外れれば止まる。
 
-### 6. 東京都の最東端は南鳥島 153.99°E
-NE 10m は南鳥島（東京都）を含むため、最東端マニフェストの 1位は東京都(153.99°E)、2位が北海道(北方領土)。
+### 6. 東京都の最東端は南鳥島 153.986°E
+NE 10m 5.1.1 は南鳥島（東京都）を含むため、最東端マニフェストの 1位は東京都(153.986°E)、2位が北海道(148.856°E・北方領土)（2026-10-26 実行）。
 「日本最東端＝北方領土」と誤解しない（最東端は南鳥島）。
+★**沖ノ鳥島は NE 10m に収録されていない**（東京都の南端は 24.212°N）。最南端を扱う図には使えない。
+西端は沖縄県 122.938°E（与那国島）、大東諸島も入る（沖縄県の東端 131.328°E）。
 
 ### 7. CRS は明示的に EPSG:4326 へ
 元データは 4326 だが、統合後に `to_crs('EPSG:4326')` で明示固定する。

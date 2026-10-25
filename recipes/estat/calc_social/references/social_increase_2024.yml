@@ -1,0 +1,19 @@
+# e-Stat 都道府県 社会増加率(人口増加率−自然増加率) 2024 — リファレンス値
+# fetch.py 既定（--time 2024100000）の社会増加率 降順 CSV を採点。
+# 社会増加率の最大は人口流入の大きい東京都で決定的。
+
+fetch_args: "--time 2024100000"
+
+expected:
+  row_count: 47
+  top1_area: "東京都"
+  # 主要都府県が47件中に存在（cat01/area 取り違えを検出）
+  must_include_in_topN:
+    n: 47
+    areas: ["東京都", "大阪府", "沖縄県", "青森県"]
+  # 社会増加率(‰)の妥当範囲（東京 +10 〜 地方 -4 程度）。指標取り違え・桁違いを検出
+  value_within_range:
+    Value: {min: -15, max: 20}
+  value_descending: true
+  year_value: 2024
+  unit: "‰"

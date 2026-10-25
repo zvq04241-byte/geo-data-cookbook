@@ -63,6 +63,12 @@ def find(word, pref, year):
     q = {"appId": app_id(), "statsCode": "00200521", "surveyYears": year, "limit": "100",
          "searchWord": " AND ".join(w for w in ("小地域", word, pref) if w)}
     r = httpx.get(CATALOG, params=q, timeout=120).json()["GET_DATA_CATALOG"]
+    # ★キーの認証に失敗しても応答は返り、件数が無いだけになる。黙って「0件」と出していた
+    #   （2026-10-25 配布物の試験で、仮のキーのまま試した AI が見つけた）。STATUS を見て止める
+    res = r.get("RESULT", {})
+    if str(res.get("STATUS", "0")) != "0":
+        raise DataFetchError(f"e-Stat API がエラーを返した（STATUS {res.get('STATUS')}）: {res.get('ERROR_MSG')}。"
+                             "ESTAT_APP_ID が正しいか確かめる。ファイル番号が分かっていれば --stat-inf-id で先に進める")
     hits = []
     for c in as_list(r.get("DATA_CATALOG_LIST_INF", {}).get("DATA_CATALOG_INF", [])):
         for x in as_list(c["RESOURCES"]["RESOURCE"]):
@@ -92,7 +98,22 @@ def num(v):
         return 0
     if v in ("X", ""):
         return None
-    return int(v.replace(",", ""))
+    try:
+        return int(v.replace(",", ""))
+    except ValueError:
+        return float(v.replace(",", "")) if _is_float(v) else _bad(v)
+
+
+def _is_float(v):
+    try:
+        float(v.replace(",", ""))
+        return True
+    except ValueError:
+        return False
+
+
+def _bad(v):
+    raise ValueError(f"数値でない値 {v!r}")
 
 
 def main():
@@ -107,6 +128,8 @@ def main():
     ap.add_argument("--boundary", action="store_true", help="境界 Shapefile も取る")
     ap.add_argument("--survey", default="A002005212020", help="境界の調査ID（令和2年＝A002005212020）")
     ap.add_argument("--output-dir", default=".")
+    ap.add_argument("--raw-dir", default=None,
+                    help="落とした都道府県のファイルをそのまま残す場所（例 data/raw/estat）。約束「取ったデータは data に置く」用")
     a = ap.parse_args()
 
     if a.find:
@@ -119,6 +142,14 @@ def main():
         sys.exit("--stat-inf-id が要る（番号は --find で探す）")
 
     raw = download(CSV_URL.format(sid=a.stat_inf_id))
+    # ★元のファイルを残す（2026-10-25 配布物の試験で、2体とも自分で手直しして足していた）
+    if a.raw_dir:
+        rd = Path(a.raw_dir); rd.mkdir(parents=True, exist_ok=True)
+        rp = rd / f"{datetime.datetime.now():%Y%m%d}_estat_{a.stat_inf_id}_raw.csv"
+        if rp.exists() and rp.read_bytes() != raw:   # 同じ日に中身の違うファイルを上書きしない
+            rp = rp.with_name(f"{datetime.datetime.now():%Y%m%d_%H%M%S}_estat_{a.stat_inf_id}_raw.csv")
+        if not rp.exists():
+            rp.write_bytes(raw)
     rows = list(csv.reader(raw.decode("cp932", errors="replace").splitlines()))
     title = rows[1][1].strip() if len(rows) > 1 else ""
     hi = next((i for i, r in enumerate(rows) if len(r) > C_CODE and r[C_CODE] == "町丁字コード"), None)
@@ -161,12 +192,22 @@ def main():
 
     out = []
     for r in leaf + parents:
-        v = [num(r[j]) for j in cols]
+        v = []
+        for j in cols:
+            try:
+                v.append(num(r[j]))
+            except ValueError as e:
+                raise DataFetchError(f"列「{head[j]}」の地域 {r[C_CODE]} に{e}。人数でない列（平均など）は --cols で外す")
+        if any(isinstance(x, float) for x in v):
+            bad = [head[j] for j, x in zip(cols, v) if isinstance(x, float)]
+            raise DataFetchError(f"小数の値がある列: {bad}（人数の列ではない。--list-cols で確かめ --cols で外す）")
         if r[C_LEVEL] == "3":
             status = "merged_parent"
             covers = ";".join(a.city + x[C_CODE] for x in leaf if x[C_TARGET] == r[C_CODE])
         else:
-            status = "secret" if r[cols[0]].strip() == "X" else "ok"
+            xs = [r[j].strip() == "X" for j in cols]
+            # 先頭の列だけで秘匿を決めない。全列 X＝secret、一部の列だけ X＝partial_secret（X の列は空欄で合計から外れる）
+            status = "secret" if all(xs) else ("partial_secret" if any(xs) else "ok")
             covers = ""
         out.append([a.city + r[C_CODE], r[C_LEVEL], r[C_OAZA], r[C_AZA], status,
                     r[C_TARGET] if status == "secret" else "", covers, *("" if x is None else x for x in v)])
@@ -175,7 +216,7 @@ def main():
     checks = {}
     for k, j in enumerate(cols):
         total = num(city[j])
-        s = sum(o[7 + k] for o in out if o[4] in ("ok", "merged_parent") and o[7 + k] != "")
+        s = sum(o[7 + k] for o in out if o[4] in ("ok", "partial_secret", "merged_parent") and o[7 + k] != "")
         checks[names[k]] = {"city": total, "sum_of_leaves": s, "match": total == s}
     verified = all(c["match"] for c in checks.values())
 
@@ -183,17 +224,20 @@ def main():
     today = datetime.datetime.now().strftime("%Y%m%d")
     stem = f"{today}_estat_small_area_{a.stat_inf_id}_{a.city}"
     csv_path = outdir / f"{stem}.csv"
+    # 境界は CSV・metadata を書く前に取る（境界で落ちたとき、境界の無い成果物だけが残らないように）
+    shp = None
+    if a.boundary:
+        z = download(SHP_URL.format(survey=a.survey, city=a.city))
+        bad = zipfile.ZipFile(io.BytesIO(z)).testzip()
+        if bad:
+            raise DataFetchError(f"境界の zip が壊れている（{bad}）")
+        shp = (Path(a.raw_dir) if a.raw_dir else outdir) / f"{today}_estat_boundary_{a.city}.zip"
+        shp.parent.mkdir(parents=True, exist_ok=True)
+        shp.write_bytes(z)
     with csv_path.open("w", encoding="utf-8", newline="\n") as f:
         w = csv.writer(f, lineterminator="\n")
         w.writerow(["key_code", "level", "oaza", "aza", "status", "secret_merged_into", "merged_parent_covers", *names])
         w.writerows(out)
-
-    shp = None
-    if a.boundary:
-        z = download(SHP_URL.format(survey=a.survey, city=a.city))
-        zipfile.ZipFile(io.BytesIO(z)).testzip()
-        shp = outdir / f"{today}_estat_boundary_{a.city}.zip"
-        shp.write_bytes(z)
 
     m = {
         "task_name": "国勢調査 小地域集計（町丁・字等別）",
@@ -207,6 +251,7 @@ def main():
         "csv_sha256": hashlib.sha256(csv_path.read_bytes()).hexdigest(),
         "row_count": len(out),
         "n_secret": sum(1 for o in out if o[4] == "secret"),
+        "n_partial_secret": sum(1 for o in out if o[4] == "partial_secret"),
         "n_merged_parent": len(parents),
         "missing_value_treatment": "'-' は0、'X'（秘匿）は空欄。秘匿の人数は secret_merged_into の地域に合算済み",
         "verification": checks,

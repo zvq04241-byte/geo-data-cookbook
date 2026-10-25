@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """fetch.py — 空港別の旅客数（欧州・米国・日本・フィリピン）を取る。
 
-  ★世界を一括で取れる無料データは無い。ACI・OAG・ICAOは有料。国ごとに組む。
+  ★空港別の旅客数を世界一括で取れる無料の公的データは見つかっていない（2026-09-15）。国ごとに組む。
   ★Eurostat の空港次元は rep_airp。geo=FR を渡すと 400。詳細は recipe.md。
 
 使い方:
@@ -35,12 +35,14 @@ UA = {"User-Agent": "Mozilla/5.0"}
 ALIAS = {"CDG": "FR_LFPG", "ORY": "FR_LFPO", "FRA": "DE_EDDF", "MAD": "ES_LEMD",
          "AMS": "NL_EHAM", "FCO": "IT_LIRF", "MUC": "DE_EDDM", "BCN": "ES_LEBL",
          "LIS": "PT_LPPT", "VIE": "AT_LOWW", "CPH": "DK_EKCH", "ARN": "SE_ESSA"}
+# ★域内は INTL_IEU27_2020（I が入る）。旧版の INTL_EU27_2020 は 200＋空で返り、黙って落ちていた
 COV = {"TOTAL": "合計", "NAT": "国内線", "INTL": "国際線",
-       "INTL_EU27_2020": "国際線(EU域内)", "INTL_XEU27_2020": "国際線(EU域外)"}
+       "INTL_IEU27_2020": "国際線(EU域内)", "INTL_XEU27_2020": "国際線(EU域外)"}
 
 
-def eu_airports(cc):
-    r = httpx.get(EU, params={"format": "JSON", "lang": "EN", "freq": "A", "time": "2024",
+def eu_airports(cc, year):
+    """その年に PAS_CRD・TOTAL の値がある空港（ラベルの一覧は値の無い空港も含みうる）"""
+    r = httpx.get(EU, params={"format": "JSON", "lang": "EN", "freq": "A", "time": str(year),
                               "tra_meas": "PAS_CRD", "unit": "PAS", "tra_cov": "TOTAL",
                               "schedule": "TOTAL"}, headers=UA, timeout=300)
     r.raise_for_status()
@@ -53,18 +55,19 @@ def eu_fetch(code, year, detail, departures=False):
     # ★PAS_CRD は到着＋出発。米BTS（出発のみ）と並べるときは PAS_CRD_DEP に揃える
     meas = "PAS_CRD_DEP" if departures else "PAS_CRD"
     covs = list(COV) if detail else ["TOTAL", "NAT", "INTL"]
-    out = {}
+    out, empty = {}, []
     for c in covs:
         r = httpx.get(EU, params={"format": "JSON", "lang": "EN", "freq": "A", "time": str(year),
                                   "rep_airp": code, "tra_meas": meas, "unit": "PAS",
                                   "schedule": "TOTAL", "tra_cov": c}, headers=UA, timeout=300)
         if r.status_code == 400 and "GEO" in r.text:
             raise SystemExit("400: 空港の次元は rep_airp（geo ではない）")
-        if r.status_code != 200: continue
-        j = r.json()
-        v = list(j["value"].values())
+        if r.status_code != 200:     # 黙って「データなし」にしない
+            raise SystemExit(f"Eurostat {code} {c}: HTTP{r.status_code} {r.text[:120]}")
+        v = list(r.json().get("value", {}).values())
         if v: out[c] = v[0]
-    return out
+        else: empty.append(c)
+    return out, empty
 
 
 def jp_flow(year, appid):
@@ -75,13 +78,23 @@ def jp_flow(year, appid):
     cls = {c["@id"]: {x["@code"]: x["@name"] for x in
                       (c["CLASS"] if isinstance(c["CLASS"], list) else [c["CLASS"]])}
            for c in sd["CLASS_INF"]["CLASS_OBJ"]}
-    rows = []
-    for v in sd["DATA_INF"]["VALUE"]:
+    ri = sd["RESULT_INF"]
+    if ri.get("NEXT_KEY"):
+        raise SystemExit(f"第9表が limit で切れた（TOTAL_NUMBER={ri.get('TOTAL_NUMBER')}）。limit を上げるかページを送る")
+    rows, n_total = [], 0
+    vals = sd["DATA_INF"]["VALUE"]; vals = vals if isinstance(vals, list) else [vals]
+    times = {v.get("@time") for v in vals}
+    if times != {f"{year}100000"}:
+        raise SystemExit(f"第9表: 年度 {year} 以外の時点が混じる/無い: {sorted(times)[:5]}")
+    for v in vals:
         try: n = int(v["$"])
         except (ValueError, KeyError): continue
+        # ★発・着どちらにも 1000＝合計 がある。空港の行と混ぜると二重計上なので出さない（数だけ数える）
+        if v["@cat01"] == "1000" or v["@cat02"] == "1000":
+            n_total += 1; continue
         rows.append(dict(発空港=cls["cat02"].get(v["@cat02"], v["@cat02"]),
                          着空港=cls["cat01"].get(v["@cat01"], v["@cat01"]), 旅客数=n))
-    return rows
+    return rows, n_total
 
 
 def us_fetch(code, year):
@@ -101,9 +114,13 @@ def us_fetch(code, year):
             "国際線(出発のみ)": int(tot - dom)}
 
 
-def jp_intl(year, appid):
+JP_INTL_KIND = {"total": ("1000", "国際線出入国者"), "in": ("1010", "国際線入国者"), "out": ("1020", "国際線出国者")}
+
+
+def jp_intl(year, appid, kind="total"):
     """日本の国際線。航空輸送統計には無いので出入国管理統計「港別 出入国者」で代える。
-       ★これは出入国者数で、航空旅客数ではない。乗り継ぎのみの客は入らない。"""
+       ★これは出入国者数で、航空旅客数ではない。船の港は除き、名前に「（空港）」がある港だけ。"""
+    c2, col = JP_INTL_KIND[kind]
     m = httpx.get(f"{ES}/getMetaInfo", params={"appId": appid, "statsDataId": ES_IMMIG},
                   timeout=300).json()["GET_META_INFO"]
     ports = {x["@name"]: x["@code"] for c in m["METADATA_INF"]["CLASS_INF"]["CLASS_OBJ"]
@@ -112,13 +129,16 @@ def jp_intl(year, appid):
     for nm, cd in ports.items():
         d = httpx.get(f"{ES}/getStatsData", params={
             "appId": appid, "statsDataId": ES_IMMIG, "cdCat03": cd,
-            "cdCat01": "1000", "cdCat02": "1000", "limit": 200}, timeout=300).json()
-        vs = d["GET_STATS_DATA"]["STATISTICAL_DATA"]["DATA_INF"].get("VALUE", [])
+            "cdCat01": "1000", "cdCat02": c2, "limit": 1000}, timeout=300).json()
+        sd = d["GET_STATS_DATA"]["STATISTICAL_DATA"]
+        if sd["RESULT_INF"].get("NEXT_KEY"):
+            raise SystemExit(f"出入国管理統計 {nm}: limit で切れた")
+        vs = sd["DATA_INF"].get("VALUE", [])
         vs = vs if isinstance(vs, list) else [vs]
-        n = sum(int(v["$"]) for v in vs
-                if v["@time"].startswith(str(year)) and v["$"].lstrip("-").isdigit())
-        if n: rows.append({"空港": nm, "国際線出入国者": n})
-    return sorted(rows, key=lambda r: -r["国際線出入国者"])
+        ys = [v for v in vs if v["@time"].startswith(str(year)) and v["$"].lstrip("-").isdigit()]
+        n = sum(int(v["$"]) for v in ys)
+        if n: rows.append({"空港": nm, col: n, "月数": len({v['@time'] for v in ys})})
+    return sorted(rows, key=lambda r: -r[col]), len(ports)
 
 
 def _miaa_pdf_url():
@@ -150,7 +170,6 @@ def ph_naia(year, cache_dir):
             sect = (m.group(2), m.group(3)); years = None
             for j in range(i, min(i + 4, len(lines))):
                 if "Month" in lines[j]:
-                    years = re.findall(r"\b(19|20)\d\d\b", lines[j])
                     years = re.findall(r"\b(?:19|20)\d\d\b", lines[j]); break
             for j in range(i, min(i + 20, len(lines))):
                 if lines[j].lstrip().startswith("Total"):
@@ -158,7 +177,6 @@ def ph_naia(year, cache_dir):
                     for side, h in zip(("Arriving", "Departing"), halves):
                         nums = [int(x.replace(",", "")) for x in
                                 re.findall(r"[\d,]{4,}", h)]
-                        half = len(years) // 2 if years else 0
                         ys = years[:len(nums)] if years else []
                         for y, n in zip(ys, nums):
                             if int(y) == year:
@@ -188,10 +206,12 @@ def ph_caap(year, cache_dir):
         xls.write_bytes(httpx.get(cands[0], headers=UA, timeout=300,
                                   follow_redirects=True).content)
     s = xlrd.open_workbook(str(xls)).sheet_by_name("passenger")
-    agg, cur = {}, None
+    agg, cur, seen = {}, None, []
     for r in range(10, s.nrows):
         a = str(s.cell_value(r, 0)).strip()
-        if a: cur = a
+        if a:
+            cur = a
+            if a not in seen: seen.append(a)
         v = s.cell_value(r, 14)
         if cur and isinstance(v, (int, float)) and v:
             agg[cur] = agg.get(cur, 0) + v
@@ -199,9 +219,19 @@ def ph_caap(year, cache_dir):
     # ★A列には空港名だけでなく地方名（Region I / CAR…）と "Total" 行も混じる
     skip = re.compile(r"^(Total|Region\b|CAR$|NCR$|ARMM|BARMM|CIVIL AVIATION|AERODROME|"
                       r"PASSENGER MOVEMENT|Airport$)", re.I)
-    return [{"空港": k, "旅客数": int(v),
-             "区分": "国際線" if "Int" in k else ("国内線" if "Dom" in k else "計")}
+    # ★"Int'l" は空港名の一部のこともある（Bicol Int'l は国内線の会社だけ）。
+    #   同じ空港に Int と Dom（または接尾辞なし）の2つのブロックがあるときだけ国際・国内に分ける
+    tag = re.compile(r"\(?\s*(Domestic|Dom\.?|Intl|Int,l\.|Int'?l\.?)\s*\)?", re.I)
+    base = lambda k: re.sub(r"\s+", " ", tag.sub("", k)).replace("Airport", "").strip(" .")
+    nb = {}
+    for k in seen: nb.setdefault(base(k), set()).add(k)
+    def kubun(k):
+        if len(nb[base(k)]) < 2: return "計"
+        return "国際線" if re.search(r"Int", k) else "国内線"
+    zero = [k for k in seen if k not in agg and not skip.match(k) and not re.match(r"^CARAGA|^Region", k)]
+    rows = [{"空港": k, "旅客数": int(v), "区分": kubun(k)}
             for k, v in sorted(agg.items(), key=lambda x: -x[1]) if v and not skip.match(k)]
+    return rows, zero
 
 
 def main():
@@ -210,6 +240,8 @@ def main():
     ap.add_argument("--us", default="", help="米国の空港コード（ATL,JFK…）")
     ap.add_argument("--jp", action="store_true", help="日本の国内線空港間旅客流動")
     ap.add_argument("--jp-intl", action="store_true", help="日本の国際線（出入国管理統計）")
+    ap.add_argument("--jp-intl-kind", choices=list(JP_INTL_KIND), default="total",
+                    help="出入国者の総数／入国者／出国者（出国者＝出発の母数）")
     ap.add_argument("--ph", action="store_true", help="フィリピン（NAIA＋地方空港）")
     ap.add_argument("--year", type=int, default=2024)
     ap.add_argument("--detail", action="store_true", help="EU域内/域外まで分ける")
@@ -222,18 +254,19 @@ def main():
     a = ap.parse_args()
 
     if a.list_eu_airports:
-        d = eu_airports(a.list_eu_airports)
-        print(f"{a.list_eu_airports} の空港 {len(d)}件")
+        d = eu_airports(a.list_eu_airports, a.year)
+        print(f"{a.list_eu_airports} の空港 {len(d)}件（{a.year}年）")
         for k, v in sorted(d.items())[:60]: print(f"   {k:<12}{v}")
         return 0
 
-    rows = []
+    rows, notes = [], []
     if a.eu:
         for q in [x.strip().upper() for x in a.eu.split(",")]:
             code = ALIAS.get(q, q)
-            v = eu_fetch(code, a.year, a.detail, a.departures)
+            v, empty = eu_fetch(code, a.year, a.detail, a.departures)
+            if empty: notes.append(f"Eurostat {code} {a.year}: 値が無い区分 {empty}")
             if not v:
-                print(f"   {q}: {a.year}年のデータなし", file=sys.stderr); continue
+                print(f"   {q}: {a.year}年の値なし（HTTP 200・空）", file=sys.stderr); continue
             sfx = "(出発のみ)" if a.departures else ""
             rows.append(dict(source="Eurostat avia_paoa", airport=code, year=a.year,
                              **{COV[k] + sfx: v[k] for k in v}))
@@ -250,18 +283,28 @@ def main():
                 if line.startswith("ESTAT_APP_ID"): appid = line.split("=", 1)[1].strip().strip('"\'')
         if not appid: raise SystemExit("ESTAT_APP_ID が要る")
     if a.jp:
-        for r in jp_flow(a.year, appid):
+        fl, n_total = jp_flow(a.year, appid)
+        notes.append(f"第9表 {a.year}年度: 発・着の「合計」行 {n_total} 件は出力しない（空港の行と混ぜると二重計上）")
+        for r in fl:
             rows.append(dict(source="e-Stat 航空輸送統計 第9表", year=a.year, **r))
     if a.jp_intl:
-        for r in jp_intl(a.year, appid):
+        ji, n_ports = jp_intl(a.year, appid, a.jp_intl_kind)
+        notes.append(f"出入国管理統計: 名前に「（空港）」がある港 {n_ports} のうち値のある {len(ji)}。船の港は除く。"
+                     f"区分={JP_INTL_KIND[a.jp_intl_kind][1]}")
+        short = [r["空港"] for r in ji if r["月数"] < 12]
+        if short: notes.append(f"出入国管理統計: 12か月そろわない空港 {short}")
+        for r in ji:
             rows.append(dict(source="e-Stat 出入国管理統計 港別出入国者", year=a.year, **r))
     if a.ph:
         v = ph_naia(a.year, a.cache_dir / "miaa")
         if v: rows.append(dict(source="MIAA Operational Statistics", 空港="NAIA(マニラ)",
                                year=a.year, **v))
         else: print(f"   NAIA: {a.year}年のデータなし（MIAAは2018年〜）", file=sys.stderr)
-        for r in ph_caap(a.year, a.cache_dir / "caap"):
+        cr, zero = ph_caap(a.year, a.cache_dir / "caap")
+        for r in cr:
             rows.append(dict(source="CAAP Passenger Movement", year=a.year, **r))
+        notes.append(f"CAAP: 値が0の行 {len(zero)}（{', '.join(zero[:12])}…）は出力しない。NAIA・Mactan は別運営。"
+                     "区分は同じ空港に Int/Dom の2ブロックがあるときだけ付け、ほかは「計」")
     if not rows: raise SystemExit("--eu / --us / --jp / --jp-intl / --ph のどれかが要る")
 
     a.output_dir.mkdir(parents=True, exist_ok=True)
@@ -279,6 +322,8 @@ def main():
                             "★米BTSは出発便のみ、日本の国際線は出入国者数で、"
                             "到着＋出発の旅客数である欧州・比とは母数が違う",
                     "year": a.year, "rows": len(rows),
+                    "scope": " / ".join(notes) if notes else "指定した空港のみ",
+                    "notes": notes,
                     "csv_sha256": hashlib.sha256(p.read_bytes()).hexdigest(),
                     "retrieved_at": datetime.now(JST).isoformat()},
                    ensure_ascii=False, indent=2), encoding="utf-8")

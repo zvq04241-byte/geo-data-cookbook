@@ -12,6 +12,12 @@ ILOSTAT の SDMX REST から製造業(ECO_AGGREGATE_MAN)の時間当たり賃金
     # PPP 調整・対象国を指定
     python fetch.py --currency PPP --countries LUX,CHE,USA,JPN --output-dir ./output
 
+    # ILOSTAT に値のある全ての国・地域の中での順位（集計地域を除く）
+    python fetch.py --currency USD --top-n 20 --all-countries --output-dir ./output
+
+既定（--countries も --all-countries も無し）は手で並べた50か国で、**世界順位ではない**。
+どの母集団で並べたかは CSV の scope 列と metadata の scope に出る。
+
 このレシピが扱う範囲:
 - 製造業の時間当たり賃金（直接 or 月給換算）× 通貨 × 国別ランキング上位N（認証不要・SDMX-CSV）
 
@@ -38,7 +44,8 @@ import httpx
 ILO_SDMX = "https://sdmx.ilo.org/rest/data/ILO"
 ILO_ACCEPT = "application/vnd.sdmx.data+csv;version=1.0.0"
 
-# 主要国（ISO alpha-3）— 高賃金〜低賃金を網羅
+# 既定の50か国（ISO alpha-3）。高賃金国から低賃金国まで手で並べたもの。選び方に検証規則は無い。
+# **この50か国の中での順位であり、世界順位ではない**（世界の中で並べるときは --all-countries）。
 DEFAULT_COUNTRIES = [
     "LUX", "CHE", "NOR", "DNK", "USA", "BEL", "NLD", "AUT", "IRL", "FIN",
     "DEU", "FRA", "SWE", "AUS", "CAN", "GBR", "ITA", "NZL", "ISL", "ESP",
@@ -47,7 +54,12 @@ DEFAULT_COUNTRIES = [
     "MEX", "THA", "ZAF", "COL", "VNM", "IND", "IDN", "PAK", "BGD", "NGA",
 ]
 CUR_MAP = {"USD": "CUR_TYPE_USD", "PPP": "CUR_TYPE_PPP", "LCU": "CUR_TYPE_LCU"}
-STANDARD_MONTHLY_HOURS = 173  # 週時間データが無い国の換算用標準値
+STANDARD_MONTHLY_HOURS = 173  # 週時間データが無い国の換算用。週40時間 × 52週 ÷ 12か月 = 173.3 時間
+
+
+def is_ilo_aggregate(code: str) -> bool:
+    """ILOSTAT の地域・所得の集計コード（X01 のような X＋数字）なら True。"""
+    return len(code) >= 2 and code[0] == "X" and code[1:].isdigit()
 
 
 class DataFetchError(Exception):
@@ -63,7 +75,8 @@ def fetch_sdmx_csv(url: str, retries: int = 3, timeout: int = 120) -> list[dict]
     """SDMX-CSV を取得して dict のリストで返す。
 
     重要: Accept ヘッダで CSV を要求しないと SDMX-ML(XML) が返る。
-    "No data" が冒頭にある場合は空（該当データなし）。
+    該当データが無いと HTTP 404 で本文 "No data is found..." が返る（2026-10-26 に確認）。
+    これは空として返す（リトライしない）。それ以外の非200はリトライのうえ失敗。
     """
     last_err = None
     for i in range(retries):
@@ -73,11 +86,11 @@ def fetch_sdmx_csv(url: str, retries: int = 3, timeout: int = 120) -> list[dict]
                 headers={"Accept": ILO_ACCEPT}, follow_redirects=True,
             ) as cl:
                 r = cl.get(url)
+            if r.status_code in (200, 404) and "No data" in r.text[:100]:
+                return []
             if r.status_code != 200:
                 raise httpx.HTTPStatusError(
                     f"status {r.status_code}", request=r.request, response=r)
-            if "No data" in r.text[:100]:
-                return []
             reader = csv.DictReader(io.StringIO(r.text))
             return list(reader)
         except httpx.HTTPError as e:
@@ -129,7 +142,10 @@ def build_urls(cc_str: str, year_from: int) -> dict:
 
 def derive_hourly(countries: list[str], hourly: dict, monthly: dict,
                   hours: dict) -> dict:
-    """国ごとに時間給を確定。直接報告→月給換算→月給/173h の順。"""
+    """国ごとに時間給を確定。直接報告→月給換算→月給/173h の順。
+
+    週時間が0以下の国は月給/173h に回す（黙って落とさない）。
+    """
     results = {}
     for cc in countries:
         if cc in hourly:
@@ -142,6 +158,9 @@ def derive_hourly(countries: list[str], hourly: dict, monthly: dict,
             if monthly_hours > 0:
                 results[cc] = {"hourly": mv / monthly_hours,
                                "year": min(myr, wyr), "source": "monthly_div_hours"}
+            else:
+                results[cc] = {"hourly": mv / STANDARD_MONTHLY_HOURS,
+                               "year": myr, "source": "monthly_div_173"}
         elif cc in monthly:
             mv, myr = monthly[cc]
             results[cc] = {"hourly": mv / STANDARD_MONTHLY_HOURS,
@@ -149,19 +168,20 @@ def derive_hourly(countries: list[str], hourly: dict, monthly: dict,
     return results
 
 
-def save_csv(ranked: list[dict], out_path: Path, *, currency: str, unit: str) -> None:
-    fields = ["Rank", "Area", "Currency", "Value", "Year", "Source", "Unit"]
+def save_csv(ranked: list[dict], out_path: Path, *, currency: str, unit: str,
+             scope: str = "") -> None:
+    fields = ["Rank", "Area", "Currency", "Value", "Year", "Source", "Unit", "scope"]
     with open(out_path, "w", encoding="utf-8", newline="\n") as f:
         w = csv.writer(f)
         w.writerow(fields)
         for r in ranked:
             w.writerow([r["rank"], r["cc"], currency, round(r["hourly"], 2),
-                        r["year"], r["source"], unit])
+                        r["year"], r["source"], unit, scope])
 
 
 def save_metadata(meta_path: Path, *, currency: str, year_from: int, top_n: int,
                   urls: dict, out_csv: Path, row_count: int, n_direct: int,
-                  n_derived: int, unit: str) -> dict:
+                  n_derived: int, unit: str, extra: dict | None = None) -> dict:
     csv_bytes = out_csv.read_bytes()
     meta = {
         "task_name": f"ilostat_wages_manufacturing_{currency.lower()}_top{top_n}",
@@ -187,6 +207,8 @@ def save_metadata(meta_path: Path, *, currency: str, year_from: int, top_n: int,
             "LCU は現地通貨で国際比較に不向き。USD/PPP 推奨。"
         ),
     }
+    if extra:
+        meta.update(extra)
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
                          encoding="utf-8")
@@ -203,7 +225,9 @@ def main() -> int:
     ap.add_argument("--year-from", type=int, default=2018,
                     help="この年以降の最新値を採用 (default 2018)")
     ap.add_argument("--countries", default=None,
-                    help="ISO3 をカンマ区切りで指定（省略時は主要50か国）")
+                    help="ISO3 をカンマ区切りで指定（省略時は既定50か国＝世界順位ではない）")
+    ap.add_argument("--all-countries", action="store_true",
+                    help="ILOSTAT に値のある全ての国・地域で並べる（集計コード X01 等は除く）")
     ap.add_argument("--output-dir", type=Path, default=Path("./output"))
     args = ap.parse_args()
 
@@ -212,9 +236,15 @@ def main() -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    countries = ([c.strip().upper() for c in args.countries.split(",")]
-                 if args.countries else DEFAULT_COUNTRIES)
-    cc_str = "+".join(countries)
+    if args.all_countries and args.countries:
+        ap.error("--all-countries と --countries は同時に使えない")
+    if args.all_countries:
+        countries = []
+        cc_str = ""            # SDMX キーの国を空にすると全ての国・地域（ワイルドカード）
+    else:
+        countries = ([c.strip().upper() for c in args.countries.split(",") if c.strip()]
+                     if args.countries else DEFAULT_COUNTRIES)
+        cc_str = "+".join(countries)
     cur_code = CUR_MAP[args.currency]
     unit = f"{args.currency}/h"
     urls = build_urls(cc_str, args.year_from)
@@ -235,7 +265,24 @@ def main() -> int:
     logging.info("直接時間給=%d国 / 月給=%d国 / 週時間=%d国",
                  len(hourly), len(monthly), len(hours))
 
+    dropped_agg = []
+    if args.all_countries:
+        seen = set(hourly) | set(monthly)
+        dropped_agg = sorted(c for c in seen if is_ilo_aggregate(c))
+        countries = sorted(c for c in seen if not is_ilo_aggregate(c))
+        if dropped_agg:
+            logging.warning("集計コードを順位から除外: %s", dropped_agg)
     results = derive_hourly(countries, hourly, monthly, hours)
+    no_value = sorted(set(countries) - set(results))
+    if no_value:
+        logging.warning("値が無く順位に入らない国: %d 件 %s", len(no_value), no_value)
+    n = len(results)
+    if args.all_countries:
+        scope = f"ILOSTAT に製造業の賃金がある全{n}か国・地域の中での順位（集計コードを除く）"
+    elif args.countries:
+        scope = f"指定した{len(countries)}か国の中での順位（値のある{n}か国）"
+    else:
+        scope = f"既定{len(DEFAULT_COUNTRIES)}か国の中での順位（世界順位ではない。値のある{n}か国）"
     if not results:
         logging.error("該当データなし（year-from を下げる/国コードを確認）")
         return 1
@@ -250,16 +297,21 @@ def main() -> int:
     slug = f"{today}_ilostat_wages_manufacturing_{args.currency.lower()}_top{args.top_n}"
     out_csv = args.output_dir / f"{slug}.csv"
     out_meta = args.output_dir / f"{slug}_metadata.json"
-    save_csv(ranked, out_csv, currency=args.currency, unit=unit)
+    save_csv(ranked, out_csv, currency=args.currency, unit=unit, scope=scope)
+    years = [r["year"] for r in ranked]
     n_direct = sum(1 for d in results.values() if d["source"] == "direct")
     meta = save_metadata(out_meta, currency=args.currency, year_from=args.year_from,
                          top_n=args.top_n, urls=urls, out_csv=out_csv,
                          row_count=len(ranked), n_direct=n_direct,
-                         n_derived=len(results) - n_direct, unit=unit)
+                         n_derived=len(results) - n_direct, unit=unit,
+                         extra={"scope": scope, "n_ranked": n,
+                                "countries_without_value": no_value,
+                                "dropped_aggregates": dropped_agg,
+                                "year_min": min(years), "year_max": max(years)})
     logging.info("出力: %s (%d rows, sha256=%s…)",
                  out_csv, len(ranked), meta["csv_sha256"][:12])
 
-    print(f"\n== ILO 製造業 時間賃金 Top {args.top_n} ({args.currency}) ==")
+    print(f"\n== ILO 製造業 時間賃金 Top {len(ranked)} ({args.currency}) — {scope} ==")
     for r in ranked:
         print(f"  {r['rank']:>3}  {r['cc']:<4}  {r['hourly']:>7.2f}{unit}  "
               f"{r['year']}  {r['source']}")

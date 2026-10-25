@@ -56,6 +56,8 @@ def main():
         hit = [(ag, f) for f, ag in fl if a.list.lower() in f.lower()]
         print(f"「{a.list}」に一致 {len(hit)}件")
         for ag, f in hit[:40]: print(f"   {ag:<18}{f}")
+        if len(hit) > 40:
+            print(f"   …ほか {len(hit) - 40}件（表示は40件まで。語を絞る）")
         return 0
     if a.dims:
         d = dims(*a.dims)
@@ -86,15 +88,35 @@ def main():
     a.output_dir.mkdir(parents=True, exist_ok=True)
     JST = timezone(timedelta(hours=9))
     today = datetime.now(JST).strftime("%Y%m%d")
-    stem = re.sub(r"[^A-Za-z0-9]+", "_", a.flow).strip("_").lower()
+    # agency も名前に入れる（同じ flow 名で agency 違いのとき上書きしない）
+    stem = re.sub(r"[^A-Za-z0-9]+", "_", f"{a.agency}_{a.flow}").strip("_").lower()
     p = a.output_dir / f"{today}_oecd_{stem}.csv"
     with p.open("w", encoding="utf-8", newline="\n") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys())); w.writeheader(); w.writerows(rows)
     yrs = sorted({int(x["TIME_PERIOD"]) for x in rows})
+    # 国ごとの最終年（報告年が国・項目で違う。全体の min/max だけでは揃って見える）
+    if "REF_AREA" not in rows[0]:
+        print("★ REF_AREA 列が無い。metadata の areas / years_by_area は空になる", file=sys.stderr)
+    by_area = {}
+    for x in rows:
+        ar = x.get("REF_AREA", "")
+        by_area[ar] = max(by_area.get(ar, 0), int(x["TIME_PERIOD"]))
+    if len(set(by_area.values())) > 1:
+        print(f"★ 最終年が国で違う: {by_area}", file=sys.stderr)
+    # 合計・世界のコードが残っていないか（上位N国に混ぜない）。値を見て知らせるだけで、落とさない
+    AGG = {"_T", "W", "W_X", "TOTAL"}   # W_X=World unspecified（国籍不明）。_Z（該当なし）は入れない
+    skip = {"OBS_VALUE", "TIME_PERIOD", "OBS_STATUS", "UNIT_MULT", "DECIMALS"}
+    agg_present = {k: sorted({x[k] for x in rows} & AGG) for k in rows[0]
+                   if k not in skip and ({x[k] for x in rows} & AGG)}
+    if agg_present:
+        print(f"★ 合計・世界・不明のコードを含む列: {agg_present}（国の順位を出すなら除く）", file=sys.stderr)
     (a.output_dir / f"{today}_oecd_{stem}_metadata.json").write_text(
         json.dumps({"source": "OECD Data Explorer (SDMX)", "url": url,
                     "agency": a.agency, "flow": a.flow, "version": a.version, "key": a.key,
                     "post_filter": a.filter, "rows": len(rows), "years": [yrs[0], yrs[-1]],
+                    "years_by_area": by_area,
+                    "aggregate_codes_present": agg_present,
+                    "scope": f"キー {a.key} に一致した {len(by_area)} 地域（{a.start}年以降）",
                     "areas": sorted({x.get("REF_AREA", "") for x in rows}),
                     "csv_sha256": hashlib.sha256(p.read_bytes()).hexdigest(),
                     "retrieved_at": datetime.now(JST).isoformat()},

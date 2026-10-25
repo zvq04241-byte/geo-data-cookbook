@@ -1,0 +1,34 @@
+{
+  "task_name": "人口推計 都道府県別自然増減率",
+  "source": {
+    "name": "総務省統計局 人口推計（各年10月1日現在人口）",
+    "via": "e-Stat API getStatsData",
+    "stats_data_id": "0003448235",
+    "table_title": "都道府県別自然増減率－総人口",
+    "url": "https://www.e-stat.go.jp/dbview?sid=0003448235",
+    "single_source": true
+  },
+  "query": {
+    "period": "2023年10月～2024年9月",
+    "area": "47都道府県"
+  },
+  "units": "千人比，‰",
+  "period_note": "期間は前年10月1日～当年9月30日（暦年ではない）",
+  "fetched_at": "2026-10-24T09:26:04.887292+09:00",
+  "csv_sha256": "d4e308403b467421db1afb22518a3470c9e4626dceb8762f1cbadef8246ee00a",
+  "row_count": 47,
+  "verification": "47都道府県と全国がそろう",
+  "verified": true,
+  "available_periods": [
+    "2016年10月～2017年9月",
+    "2017年10月～2018年9月",
+    "2018年10月～2019年9月",
+    "2019年10月～2020年9月",
+    "2020年10月～2021年9月",
+    "2021年10月～2022年9月",
+    "2022年10月～2023年9月",
+    "2023年10月～2024年9月"
+  ],
+  "national": -7.2,
+  "count_positive": 0
+}

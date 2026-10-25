@@ -10,10 +10,10 @@
   python fetch.py --list-industries                      # 取得可能な産業分類(コード:名称)を列挙
   python fetch.py --industry 52 --measure 販売額 --top-n 12      # 飲食料品卸売業
   python fetch.py --industry 58 --measure 販売額                  # 飲食料品小売業
-  python fetch.py --industry 飲食料品小売 --measure 売場面積       # 名称部分一致も可
+  python fetch.py --industry 58 --measure 売場面積                # 名称でも可（複数に当たると候補を出して止まる）
 
 勝ちパターン（recipe.md 参照）:
-  - 商業統計は廃止。卸売/小売の構造データは「経済センサス活動調査」（5年ごと: 2012/2016/2021）。
+  - 商業統計調査は2014年が最後。2016・2021年の卸売/小売の構造データは「経済センサス活動調査」。
   - 指標は **tab（表章項目）**。cdTab=703-2021 等で絞る（製造業表は cat01 だが商業表は tab）。
   - 産業は cat01（卸小売の細分類）。中分類は 52飲食料品卸売 / 58飲食料品小売 等のコードで直接指定可。
   - 従業者規模は cat02。**合計=0** を指定（規模別の重複を避ける）。
@@ -76,7 +76,9 @@ def get_json(endpoint, params, retries=3, timeout=120):
 
 def vlist(sd):
     """VALUE は1件だと dict, 複数だと list になる（e-Stat定番罠）。常に list に正規化。"""
-    v = sd["DATA_INF"]["VALUE"]
+    v = (sd.get("DATA_INF") or {}).get("VALUE")
+    if v is None:
+        raise DataFetchError("e-Stat", "", "EMPTY", "該当データが0件（表ID・tab・産業コードの組を確かめる）")
     return v if isinstance(v, list) else [v]
 
 
@@ -119,12 +121,17 @@ def main():
 
     code = None
     for c, n in inds:
-        if c == a.industry:
+        if c == a.industry or n == a.industry:
             code, ind_name = c, n; break
     if code is None:
-        for c, n in inds:
-            if a.industry in n:
-                code, ind_name = c, n; break
+        cand = [(c, n) for c, n in inds if a.industry in n]
+        if len(cand) > 1:   # 部分一致で複数に当たったら、最初の1件に黙って決めない
+            print(f"産業 '{a.industry}' が {len(cand)} 件に当たる。コードで指定する:", file=sys.stderr)
+            for c, n in cand:
+                print(f"   {c}\t{n}", file=sys.stderr)
+            return 2
+        if cand:
+            code, ind_name = cand[0]
     if code is None:
         print(f"産業 '{a.industry}' に一致なし。--list-industries で確認を。", file=sys.stderr); return 2
 
@@ -133,7 +140,14 @@ def main():
     params = {"appId": app_id, "statsDataId": stats_id, "cdTab": cd_tab, "cdCat01": code, "limit": "3000"}
     if lv["has_size"]:
         params["cdCat02"] = "0"
-    sd = get_json("getStatsData", params)["GET_STATS_DATA"]["STATISTICAL_DATA"]
+    gsd = get_json("getStatsData", params)["GET_STATS_DATA"]
+    if str(gsd.get("RESULT", {}).get("STATUS", "0")) not in ("0", "1"):
+        raise DataFetchError("e-Stat", "getStatsData", "API_ERROR", str(gsd.get("RESULT", {}).get("ERROR_MSG")))
+    sd = gsd.get("STATISTICAL_DATA", {})
+    ri = sd.get("RESULT_INF", {}) or {}
+    if ri.get("NEXT_KEY"):   # limit 超過。残りは返っていない
+        raise DataFetchError("e-Stat", "getStatsData", "TRUNCATED",
+                             f"limit={params['limit']} を超えた（TOTAL_NUMBER={ri.get('TOTAL_NUMBER')}）。取得が途中で切れている")
 
     amap = {}
     for c in sd["CLASS_INF"]["CLASS_OBJ"]:
@@ -142,6 +156,7 @@ def main():
             amap = {o["@code"]: o["@name"] for o in objs}
 
     rows, national, suppressed = [], None, 0
+    excluded = {"pref_total": 0, "tokubetsu_kubu": 0, "seirei_ku": 0, "non_numeric_code": 0, "seirei_city_in_pref_table": 0}
     for v in vlist(sd):
         area = v.get("@area", "")
         name = amap.get(area, area)
@@ -154,19 +169,34 @@ def main():
         if area == "00000":
             national = amt; continue
         if not (area.isdigit() and len(area) == 5):   # 英字集計(区部/市部/郡部 等)を除外
+            excluded["non_numeric_code"] += 1
             continue
         if is_muni:
             if area.endswith("000"):                  # 都道府県計を除外
+                excluded["pref_total"] += 1
                 continue
             if name == "特別区部":                    # 東京集計を除外（個別の特別区を採用）
+                excluded["tokubetsu_kubu"] += 1
                 continue
             if name.endswith("区") and "市" in name:   # 政令市の区を除外（"○○市△区"。特別区"中央区"等は残す）
+                excluded["seirei_ku"] += 1
                 continue
         else:
             if not (area.endswith("000") and 1 <= int(area[:2]) <= 47):  # 都道府県のみ
+                excluded["seirei_city_in_pref_table"] += 1
                 continue
         rows.append((area, name, amt))
     rows.sort(key=lambda x: x[2], reverse=True)
+    # 名前の規則で落とした結果を数で確かめる（東京の特別区は 13101〜13123 の23区）
+    n_tokyo_wards = sum(1 for x in rows if "13101" <= x[0] <= "13123")
+    if is_muni and n_tokyo_wards != 23:
+        print(f"警告: 残った東京の特別区が {n_tokyo_wards} 区（23ではない。秘匿か除外規則を確かめる）", file=sys.stderr)
+    if not is_muni and len(rows) != 47:
+        print(f"警告: 都道府県が {len(rows)} 件（47ではない）", file=sys.stderr)
+    if is_muni:
+        scope = f"全市区町村のうち値のある{len(rows)}件（政令市は市計・東京は23特別区、秘匿/欠損{suppressed}件を除く）。CSVは全件・--top-n は画面表示のみ"
+    else:
+        scope = f"{len(rows)}都道府県すべて（政令市を除く）。CSVは全件・--top-n は画面表示のみ"
 
     total = sum(x[2] for x in rows)
     verified = (not is_muni) and (national is not None) and abs(total - national) / national < 0.005
@@ -194,6 +224,8 @@ def main():
         "units": unit, "fetched_at": datetime.datetime.now().astimezone().isoformat(),
         "csv_sha256": sha256_of(csv_path),
         "row_count_areas": len(rows), "suppressed_or_missing": suppressed,
+        "scope": scope, "excluded_counts": excluded,
+        "tokyo_special_wards_kept": n_tokyo_wards if is_muni else None,
         "national_total": national, "sum_of_areas": total,
         "verification_sum_equals_national": verified,
         "gotchas": "指標はtab(cdTab)。産業はcat01。都道府県表はcat02=0(規模合計)・市区町村表はcat02なし。"

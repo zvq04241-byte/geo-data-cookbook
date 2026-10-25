@@ -5,7 +5,7 @@ task: 国別インジケータ取得（ranking / trend）
 items: [GDP, 人口, 教育, 健康, 経済等の World Bank 全インジケータ]
 tags: [world_bank, indicator, ranking, timeseries, country-level, rest-api, no-auth, json-paginated]
 summary: World Bank Indicators API V2 から指定インジケータの国別ランキング or 時系列を取得
-verified_at: 2026-05-18
+verified_at: 2026-10-26
 complexity: medium
 auth_required: false
 data_size_mb: 0  # ライブAPI
@@ -16,14 +16,26 @@ data_size_mb: 0  # ライブAPI
 ## 何をする
 World Bank Indicators API V2 から、任意のインジケータ（GDP, 人口, 教育, 健康 等）を指定国群について取得し、**最新値のランキング** または **時系列**を CSV + metadata.json に出力する。
 
+**順位の母集団は3通り。出力に必ず書き出す**（CSV の `scope` 列と metadata の `scope`）:
+| 指定 | 母集団 | scope の例 |
+|---|---|---|
+| `--all-countries` | 集計地域を除く全ての国・地域（2026-10-26 時点 217） | 集計地域を除く全217か国・地域の中での順位（値のある212か国・地域） |
+| 省略 | 手で並べた既定49か国（**世界順位ではない**） | 既定49か国の中での順位（世界順位ではない。値のある49か国） |
+| `--countries` | 指定した国 | 指定した10か国の中での順位（値のある10か国） |
+
+「世界の上位N」と書くなら `--all-countries` を使う。既定49か国の外の国が上位に入る指標は多い（1人当たりGDP・比率・資源の指標など）。
+ranking では集計地域（WLD・EUU・所得階層など）を必ず除く。判定は国メタデータ（`/v2/country`）の region が `Aggregates` のもの。
+所得階層の集計（High income 等）は `countryiso3code` が空で返るので、これも順位に入らない。除いたものは metadata の
+`dropped_aggregates`・`dropped_rows_without_iso3` に残る。各国の最新非null年で並べるので年が揃わないことがある（`year_min`・`year_max`）。
+
 ## API情報
 - **出典**: World Bank Open Data — Indicators API V2
 - **エンドポイント**: `https://api.worldbank.org/v2/country/{cc1};{cc2}/indicator/{indicator}`
 - **認証**: 不要
 - **形式**: JSON（XML も選べるが本レシピは JSON）
-- **レート制限**: 公式記載なし、ただし `per_page` 上限 1000
+- **レート制限**: 公式の数値は確認していない。本レシピは `per_page=1000` で取り、`pages` を辿って全件を結合する
 - **インジケータカタログ**: https://data.worldbank.org/indicator
-- **更新頻度**: 月次〜年次、インジケータごと
+- **更新日**: インジケータごとに違う。応答の先頭 `lastupdated` で確かめる（2026-10-26 に取った GDP は 2026-10-08）
 
 ## よく使うインジケータコード（参照表）
 
@@ -47,12 +59,12 @@ World Bank Indicators API V2 から、任意のインジケータ（GDP, 人口,
 
 ### ranking モード（最新値の国別順位）
 ```bash
-# GDP 上位30か国
+# GDP 上位30か国（集計地域を除く全ての国・地域の中で＝世界順位）
 python fetch.py --indicator NY.GDP.MKTP.CD --mode ranking --top-n 30 \
-    --output-dir ./output
+    --all-countries --output-dir ./output
 
-# 1人当たりGDP 上位20（任意の国群）
-python fetch.py --indicator NY.GDP.PCAP.CD --mode ranking --top-n 20 \
+# 指定した10か国の中での1人当たりGDPの順位（世界順位ではない。出力は最大10行）
+python fetch.py --indicator NY.GDP.PCAP.CD --mode ranking --top-n 10 \
     --countries USA,CHN,JPN,DEU,IND,GBR,FRA,ITA,CAN,BRA \
     --output-dir ./output
 ```
@@ -69,7 +81,8 @@ python fetch.py --indicator SP.POP.TOTL --mode trend \
 |---|---|
 | `--indicator` | WB インジケータコード（必須） |
 | `--mode` | `ranking`（最新値順位） / `trend`（国×年） |
-| `--countries` | ISO3 カンマ区切り。省略時は主要50か国 |
+| `--countries` | ISO3 カンマ区切り。省略時は既定49か国（世界順位ではない） |
+| `--all-countries` | 集計地域を除く全ての国・地域（`--countries` と同時に使えない） |
 | `--top-n` | ranking の上位件数（default: 30） |
 | `--year-from` | trend の開始年（default: 2000） |
 | `--mrv` | Most Recent Values の取得年数（default: 10） |
@@ -134,10 +147,9 @@ for r in rows:
 - `per_page=M` = ページサイズ（全レコード合計）
 - 国数 × mrv が per_page を超えると **ページングが必要**
 
-50か国 × 10年 = 500レコード → per_page=500 で1ページに収まる。
-ただし50か国 × 50年 = 2500レコード → per_page=500 だと5ページに分かれる。
+49か国 × 10年 = 490レコード → 1ページに収まる。全ての国・地域（集計地域を含め266）× 10年 = 2,660レコード → 3ページ。
 
-本レシピは `per_page=500` 固定。50か国超 or mrv=50超 だとページング処理が必要（未実装）。
+本レシピは `per_page=1000` で取り、`pages` を辿って全ページを結合する。取得件数が `total` に届かなければ止まる（`INCOMPLETE_PAGING`）。
 
 ### 5. 国コードは ISO3
 World Bank は ISO3 alpha 標準。例: 日本=JPN, 米国=USA。
@@ -148,7 +160,7 @@ World Bank は ISO3 alpha 標準。例: 日本=JPN, 米国=USA。
 - `TWN` = Taiwan, China（中国の一部として扱う）
 - `KOR` = Korea, Rep.（南朝鮮）
 - `PRK` = Korea, DPR.（北朝鮮）
-- 集計地域（"WLD"=World, "EUU"=European Union 等）も国コード扱いで返るので、ranking で除外したい場合は明示フィルタ必要
+- 集計地域（"WLD"=World, "EUU"=European Union 等）も国コード扱いで返る。本レシピの ranking は国メタデータの region が `Aggregates` のものを除く（`fetch_aggregate_codes`）。trend は除かない（世界計の推移を取りたいことがあるため）
 
 ### 6. country フィールドの構造
 レスポンスの `country` フィールドは **dict 形式**:
@@ -172,53 +184,33 @@ ISO2 と国名がそこに入っている。`countryiso3code` は別フィール
 - 古い年のデータを取る時は **国コード変遷を確認**
 
 ### 10. レート制限と並列化
-World Bank API はおおむね寛容だが、**1秒あたり10リクエスト超えると 503 が返る** ことがある。
-本レシピは1リクエストで全国分取得するため問題なし。
-複数インジケータを並列で叩く場合は `asyncio.gather` + セマフォで5並列程度に抑制推奨。
+レート制限の公式の数値は確認していない（測ってもいない）。
+本レシピは1つのインジケータを1本の URL（＋ページ）で取るので、並列にはしない。
+複数インジケータを並列で叩くなら同時接続を少数に抑え、503 や接続切れが出たら間隔を空けて再試行する。
 
-### 11. TWN（台湾）を含むと多国一括クエリが 4xx になる（2026-05-23 検証）
-**症状**:
-- `country/USA;CHN;...;TWN;...` のような多国 `;` 連結クエリで `TWN` を含むと、HTTP 400/404 が返ることがある。
-- TWN 単独や TWN を除外したリストは 200 OK。
-
-**原因**:
-- World Bank API は TWN を国コードリストに持つが、多くの indicator で台湾データを中国に統合しており **`page=0/total=0` を返す**。
-- 多国一括時に「データなし国」が混ざるとレスポンス組立てが失敗する模様（API 側仕様、ドキュメント明記なし）。
-
-**対策**:
-- `DEFAULT_COUNTRIES` から **TWN を除外**（本 fetch.py は対応済、49カ国構成）。
-- 台湾を明示的に欲しい場合は `--countries TWN` で単独取得する（ただし値は空）。
-
-```python
-# ❌ ダメな例: TWN を含む50カ国一括
-"https://api.worldbank.org/v2/country/USA;CHN;...;TWN;...;KEN/indicator/NY.GDP.MKTP.CD"
-# → HTTP 400/404
-
-# ✅ OK: TWN を除外した49カ国
-"https://api.worldbank.org/v2/country/USA;CHN;...;KEN/indicator/NY.GDP.MKTP.CD"
-# → HTTP 200、全国分取得
-```
-
-**注意**:
-- 同様の「データなし国」が他にも潜在する可能性（XKX=コソボ等）。新規 indicator を試す時は 200 OK を必ず検証する。
+### 11. TWN（台湾）は値が返らない
+- `country/TWN/indicator/NY.GDP.MKTP.CD` は `page=0/total=0`・値 `null`（2026-10-26 に確認）。台湾の値は World Bank では取れない
+- 2026-05-23 に「TWN を含む多国一括で HTTP 400/404」を観測して既定から外した（記録は残っていない）。
+  2026-10-26 に既定49か国＋TWN で再試行すると **200 OK・490件**（TWN は0件）で、4xx は再現しなかった。原因は分かっていない
+- 既定49か国は TWN を外したまま。`--countries` に値の返らない国を入れたときは metadata の `countries_without_value` に出る
+- 新しい国コード・インジケータを試すときは、応答が 200 で件数が `total` と合うことを確かめる
 
 ### 12. 航空旅客数・航空貨物は「航空会社の登録国」で数えた値（2026-10-21）
 `IS.AIR.PSGR`（航空旅客数）・`IS.AIR.GOOD.MT.K1`（航空貨物）は、ICAO の統計を
 **航空会社の登録国ごと**に足した値で、**その国の空港の利用者ではない。**
-格安航空会社の本拠がある国が大きく出る（授業ライブ作図で、アイルランド＝ライアンエアーが3位に出た）。
+格安航空会社の本拠がある国が大きく出る。2023年の `IS.AIR.PSGR` を集計地域を除く全ての国・地域で並べると、
+アメリカ合衆国・中国に次いで**アイルランドが3位**（1億9,253万人。2026-10-26 に API で確認。アイルランドを本拠とする大手格安航空会社の旅客が入るため）。
 - 国の航空の大きさ・ハブ空港の話には使わない。空港の側で数えた値（ACI の空港別旅客数・`aviation/airport_passengers`）を使う
 - どうしても使うときは「航空会社の登録国で数えた値」と注記し、外れて出る国の理由を書く
 
 ## 効くケース
-- 「世界GDP上位30」「主要国の人口推移」「OECD加盟国の失業率」等の典型的教材データ
-- 任意インジケータ × 任意国群の最新値ランキング
-- 主要50か国 default リストでカバーできる範囲
+- 「世界GDP上位30」（`--all-countries`）「主要国の人口推移」「OECD加盟国の失業率」（`--countries` で加盟国を渡す）
+- 任意インジケータ × 任意国群の最新値ランキング（母集団は `scope` に出る）
 
 ## 効かないケース（別レシピ推奨）
 | 要求 | 推奨レシピ | 状態 |
 |---|---|---|
 | 複数インジケータの結合（GDP × 人口 → 1人あたり計算） | `world_bank/multi_indicator` | 未作成 |
-| 全世界217か国の取得 | `world_bank/all_countries`（ページング対応） | 未作成 |
 | 地域・所得階級別ランキング | `world_bank/aggregate_groups` | 未作成 |
 | 古い国コード（USSR等）の遡及 | 別レシピ要、変換テーブル必要 | 未作成 |
 

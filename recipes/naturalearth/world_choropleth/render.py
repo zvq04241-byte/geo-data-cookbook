@@ -29,7 +29,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 NE_URL = "https://naciscdn.org/naturalearth/50m/cultural/ne_50m_admin_0_countries.zip"
 
-# 高位=赤 / 中位=黄 / 低位=青（3階級の既定）。N>3 は RdYlBu を等分。
+# 高位=赤 / 中位=黄 / 低位=青（3階級の既定は手置きの3色）。N≠3 は RdYlBu_r を等分。
 DEFAULT_3 = ["#4575b4", "#fee090", "#d73027"]  # 低→高
 NODATA = "#e8e8e8"
 
@@ -53,7 +53,7 @@ def sha256_of(p):
 
 def load_ne(cache_dir):
     import geopandas as gpd
-    # geopandas は URL 直読み可。失敗時のみローカルキャッシュにフォールバック。
+    # geopandas は URL 直読み。3回試して駄目なら止める（ローカルキャッシュは持たない。cache_dir は未使用）。
     for attempt in range(3):
         try:
             return gpd.read_file(NE_URL)
@@ -67,8 +67,14 @@ def quantile_classify(values, n):
     """欠損を除いた値を N 分位で階級化。境界（昇順）を返す。"""
     import pandas as pd
     s = pd.Series(values).dropna()
+    if len(s) < n:
+        raise RenderError(f"値のある国が {len(s)} しかなく {n} 階級に分けられない", kind="classify")
     qs = [s.quantile(i / n) for i in range(n + 1)]
     qs[0], qs[-1] = s.min(), s.max()
+    # 同値が多いと境界が重なり、空の階級が凡例に並ぶ。黙って描かずに止める
+    if any(qs[i] >= qs[i + 1] for i in range(n)):
+        raise RenderError(f"分位の境界が重なる（同値が多い）: {qs}。階級数を減らすか値で切る",
+                          kind="classify")
     return qs
 
 
@@ -101,7 +107,9 @@ def main():
                     help="コード種別（既定auto: 2文字ならISO_A2扱い）")
     ap.add_argument("--classify-n", type=int, default=3, help="階級数（既定3）")
     ap.add_argument("--bbox", nargs=4, type=float, metavar=("WEST", "EAST", "SOUTH", "NORTH"),
-                    default=[-30, 50, 34, 75], help="切り出し範囲（経度西東・緯度南北）")
+                    required=True,
+                    help="切り出し範囲（経度西東・緯度南北）。必須（旧版は既定が欧州で、渡し忘れると黙って欧州図になった）。"
+                         "世界図なら -180 180 -90 90")
     ap.add_argument("--projection", default="platecarree",
                     choices=["platecarree", "albers", "laea", "cea"],
                     help="platecarree=正方形図法(既定) / albers=正積円錐図法(中緯度・矩形クロップ良・推奨) "
@@ -110,7 +118,7 @@ def main():
     ap.add_argument("--std-parallel", type=float, default=None,
                     help="cea の標準緯線（既定: bbox南北の中央）。形の歪みが最小になる緯度")
     ap.add_argument("--title", default="階級区分図", help="図タイトル")
-    ap.add_argument("--unit", default="", help="凡例の単位（例: %）")
+    ap.add_argument("--unit", default="", help="凡例の単位（例: %%）")
     ap.add_argument("--source", default="", help="出典注記")
     ap.add_argument("--output-dir", default="./output")
     ap.add_argument("--basename", default=None, help="出力ファイル名の基底（既定: 日付_choropleth）")
@@ -159,12 +167,12 @@ def main():
     df = df[[args.code_col, args.value_col]].rename(
         columns={args.code_col: "code", args.value_col: "value"})
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
-
-    # === 分類 ===
-    n = args.classify_n
-    breaks = quantile_classify(df["value"].tolist(), n)
-    cols = palette(n)
-    df["cls"] = df["value"].apply(lambda x: class_of(x, breaks))
+    w, e, s, north = args.bbox
+    if not (w < e and s < north):
+        raise RenderError(f"--bbox は 西<東・南<北 で渡す: {args.bbox}", kind="input")
+    codes = df["code"].dropna().astype(str)
+    if codes.empty:
+        raise RenderError("国コードが1件も無い", kind="input")
 
     # === Natural Earth 結合 ===
     print("Fetching Natural Earth 50m...")
@@ -172,11 +180,21 @@ def main():
 
     kind = args.code_kind
     if kind == "auto":
-        sample = str(df["code"].dropna().iloc[0])
-        kind = "iso_a2" if len(sample) == 2 else "name"
+        # 先頭1件で決めると、2文字と国名が混ざったとき片方が丸ごと未結合になる。全件で見る
+        lens2 = codes.str.len().eq(2)
+        if lens2.all():
+            kind = "iso_a2"
+        elif not lens2.any():
+            kind = "name"
+        else:
+            raise RenderError(f"2文字コードと国名が混在（2文字 {int(lens2.sum())} / 他 {int((~lens2).sum())}）。"
+                              "--code-kind を明示する", kind="input")
 
     if kind == "iso_a2":
         # ★ Natural Earth は仏・諾などで ISO_A2="-99"（欠番）。ISO_A2_EH が正しい値を持つ。
+        if "ISO_A2_EH" not in g.columns and (g["ISO_A2"] == "-99").any():
+            raise RenderError("ISO_A2=-99 の国があるのに ISO_A2_EH 列が無い（NE の版を確かめる）",
+                              kind="fetch")
         eh = g["ISO_A2_EH"] if "ISO_A2_EH" in g.columns else g["ISO_A2"]
         g["_key"] = g["ISO_A2"].where(g["ISO_A2"] != "-99", eh).str.upper()
         df["_key"] = df["code"].str.upper().replace(GEO_FIXUP)
@@ -184,20 +202,32 @@ def main():
         g["_key"] = g["ADMIN"]
         df["_key"] = df["code"]
 
-    cls_map = dict(zip(df["_key"], df["cls"]))
-    val_map = dict(zip(df["_key"], df["value"]))
-    g["cls"] = g["_key"].map(cls_map)
-    g["value"] = g["_key"].map(val_map)
+    # 同じ国が2行あると後勝ちで1つに潰れ、分位にも二重に入る。止める
+    dup = sorted(df.loc[df["_key"].duplicated(keep=False) & df["_key"].notna(), "_key"].unique())
+    if dup:
+        raise RenderError(f"同じ国コードが複数行: {dup}（年・版の違う行が混ざっていないか）", kind="input")
 
     # 結合検証: CSV側で地図に乗らなかったコードを必ず報告（黙って欠落させない）
     matched = set(df["_key"]) & set(g["_key"])
-    unmatched = sorted(set(df["_key"]) - matched)
+    unmatched = sorted(set(df["_key"].dropna()) - matched)
     print(f"結合: {len(matched)}/{len(df)} 一致")
     if unmatched:
-        print(f"★  地図に未結合のコード: {unmatched}")
+        print(f"★  地図に未結合のコード（分位の計算にも入れない。集計行・表記ゆれを確かめる）: {unmatched}")
+
+    # === 分類 ===
+    # ★分位は「地図に乗る国の値」だけで切る。未結合のコード（World・EU 等の集計行、表記ゆれ）を
+    #   入れると、地図の色分けと凡例の境界が食い違う
+    n = args.classify_n
+    on_map = df[df["_key"].isin(matched)]
+    breaks = quantile_classify(on_map["value"].tolist(), n)
+    cols = palette(n)
+    df["cls"] = df["value"].apply(lambda x: class_of(x, breaks))
+    cls_map = dict(zip(on_map["_key"], df.loc[on_map.index, "cls"]))
+    val_map = dict(zip(on_map["_key"], on_map["value"]))
+    g["cls"] = g["_key"].map(cls_map)
+    g["value"] = g["_key"].map(val_map)
 
     # === 投影（既定=正方形図法＝再投影なし / laea・cea は to_crs で再投影）===
-    w, e, s, north = args.bbox
     midlon, midlat = (w + e) / 2.0, (s + north) / 2.0
     if args.projection in ("albers", "laea", "cea"):
         if args.projection == "albers":
@@ -217,26 +247,45 @@ def main():
             crs = f"+proj=cea +lon_0={midlon} +lat_ts={lat_ts} +datum=WGS84 +units=m +no_defs"
             proj_label = f"正積円筒図法 (cylindrical equal-area, lat_ts={lat_ts})"
 
-        # ★ 再投影アーティファクト対策: 描画域の窓で先にクリップ（遠方ジオメトリの滲み線を除去）
-        #   gpd.clip は形を切るが国は落とさない（centroid フィルタとは別物）
         import numpy as np
         from shapely.geometry import box as _shp_box
-        g["geometry"] = g.geometry.buffer(0)  # 不正ジオメトリ修復
-        win = _shp_box(w - 8, max(s - 8, -89), e + 8, min(north + 8, 89))
-        g = gpd.clip(g, win)
-        g = g.to_crs(crs)
-
-        # xlim/ylim は窓をグリッドサンプルして投影（方位図法の湾曲した辺も内包）
         from pyproj import Transformer
+
+        # xlim/ylim は bbox をグリッドサンプルして投影（方位図法の湾曲した辺も内包）
         tr = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
         lons = np.linspace(w, e, 60)
         lats = np.linspace(s, north, 60)
         gx, gy = np.meshgrid(lons, lats)
         X, Y = tr.transform(gx.ravel(), gy.ravel())
         xlim, ylim = (float(np.min(X)), float(np.max(X))), (float(np.min(Y)), float(np.max(Y)))
+
+        # ★ 再投影アーティファクト対策: 窓で先にクリップ（遠方ジオメトリの滲み線を除去）。
+        #   窓は「表示枠（投影後の矩形）を緯度経度に戻した範囲」＋2°で取る。
+        #   旧版は bbox±8°で、円錐・方位図法では枠の上隅が経度で bbox の外まで広がる
+        #   （欧州 -30..50 の albers で -68..88°）ため、枠の中に見える陸が切られて白く抜けていた。
+        inv = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+        ex, ey = np.linspace(*xlim, 400), np.linspace(*ylim, 400)
+        fx = np.concatenate([ex, ex, np.full(400, xlim[0]), np.full(400, xlim[1])])
+        fy = np.concatenate([np.full(400, ylim[0]), np.full(400, ylim[1]), ey, ey])
+        flon, flat = inv.transform(fx, fy)
+        flon, flat = np.asarray(flon), np.asarray(flat)
+        ok = np.isfinite(flon) & np.isfinite(flat)
+        wl, wr = max(float(flon[ok].min()) - 2, -180), min(float(flon[ok].max()) + 2, 180)
+        ws, wn = max(float(flat[ok].min()) - 2, -89), min(float(flat[ok].max()) + 2, 89)
+        for plat in (90, -90):   # 極が枠の中に入るなら、その側は極まで取る
+            px, py = tr.transform(midlon, plat)
+            if np.isfinite(px) and xlim[0] <= px <= xlim[1] and ylim[0] <= py <= ylim[1]:
+                ws, wn = (ws, 89) if plat > 0 else (-89, wn)
+                wl, wr = -180, 180
+        g["geometry"] = g.geometry.buffer(0)  # 不正ジオメトリ修復
+        win = _shp_box(wl, ws, wr, wn)
+        g = gpd.clip(g, win)
+        g = g.to_crs(crs)
+        clip_window = [round(wl, 2), round(ws, 2), round(wr, 2), round(wn, 2)]
         show_axes = False
     else:
         xlim, ylim = (w, e), (s, north)
+        clip_window = None
         proj_label = "正方形図法 (plate carrée / 正距円筒)"
         show_axes = True
 
@@ -325,15 +374,26 @@ def main():
         print(f"★  Inkscape 変換不可（{type(ex).__name__}）。PDFは未生成（SVGを使用してください）。")
 
     # === metadata ===
+    class_counts = {str(ci): int((g["cls"] == ci).sum()) for ci in range(n)}
+    n_on_map = int(g["_key"].isin(matched).sum())
+    nodata_count = int((g["_key"].isin(matched) & g["value"].isna()).sum())
+    # 検算: 階級ごとの国数＋値の欠損＝地図に乗った国（NE の面）の数
+    assert sum(class_counts.values()) + nodata_count == n_on_map, \
+        (class_counts, nodata_count, n_on_map)
     meta = {
         "recipe": "naturalearth/world_choropleth",
         "title": args.title,
         "code_kind": kind,
         "classify_n": n,
         "class_breaks": [round(float(b), 4) for b in breaks],
-        "class_counts": {str(ci): int((g["cls"] == ci).sum()) for ci in range(n)},
-        "nodata_count": int(g["value"].isna().sum() & 0) or int((g["_key"].isin(df["_key"]) & g["value"].isna()).sum()),
+        "class_counts": class_counts,
+        "nodata_count": nodata_count,
+        "n_countries_on_map": n_on_map,
+        "breaks_from": "地図に結合できた国の値のみ（未結合コードは除外）",
         "bbox": {"west": w, "east": e, "south": s, "north": north},
+        "scope": (f"表示範囲 経度{w}〜{e}・緯度{s}〜{north}。色は入力CSVの国のうち地図に結合できた"
+                  f"{len(matched)}件（未結合 {len(unmatched)}件は描かない）"),
+        "clip_window_lonlat": clip_window,
         "projection": proj_label,
         "pdf_method": pdf_method,
         "source_dataset": NE_URL,

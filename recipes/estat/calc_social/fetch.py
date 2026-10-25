@@ -92,7 +92,14 @@ def fetch_estat(api_key: str, cd_cat01: str, cd_time: str,
                     raise DataFetchError(
                         source="e-Stat", url=safe_url, kind="API_ERROR",
                         message=str(data.get("RESULT", {}).get("ERROR_MSG", "unknown")))
-                return data.get("STATISTICAL_DATA", {})
+                sd = data.get("STATISTICAL_DATA", {})
+                # limit 超過時は RESULT_INF.NEXT_KEY が付き、残りは返らない。黙って欠けないよう止める
+                ri = sd.get("RESULT_INF", {}) or {}
+                if ri.get("NEXT_KEY"):
+                    raise DataFetchError(
+                        source="e-Stat", url=safe_url, kind="TRUNCATED",
+                        message=f"limit 超過（TOTAL_NUMBER={ri.get('TOTAL_NUMBER')}）。取得が途中で切れている")
+                return sd
         except httpx.HTTPError as e:
             last_err = e
             logging.warning("fetch retry %d/%d: %s", i + 1, retries, e)
@@ -120,12 +127,13 @@ def is_prefecture(code: str) -> bool:
     return len(code) == 5 and code.endswith("000") and code != "00000"
 
 
-def values_by_pref(sd: dict, area_map: dict) -> tuple[dict, str]:
-    """都道府県別 {name: value} と単位を返す。"""
+def values_by_pref(sd: dict) -> tuple[dict, str, list]:
+    """都道府県別 {area code: value}・単位・数値化できなかった area code を返す。
+    突き合わせは名前でなく area code で行う（表記ゆれで黙って落ちないように）。"""
     values = sd.get("DATA_INF", {}).get("VALUE", [])
     if isinstance(values, dict):
         values = [values]
-    out, unit = {}, ""
+    out, unit, non_numeric = {}, "", []
     for v in values:
         code = v.get("@area", "")
         if not is_prefecture(code):
@@ -133,10 +141,11 @@ def values_by_pref(sd: dict, area_map: dict) -> tuple[dict, str]:
         try:
             num = float(str(v.get("$", "")).replace(",", ""))
         except (ValueError, TypeError):
+            non_numeric.append(code)
             continue
-        out[area_map.get(code, code)] = num
+        out[code] = num
         unit = v.get("@unit", "") or unit
-    return out, unit
+    return out, unit, non_numeric
 
 
 def main() -> int:
@@ -165,26 +174,40 @@ def main() -> int:
         logging.error("取得失敗: %s", e)
         return 1
 
-    area_map = build_area_map(sd_pop) or build_area_map(sd_nat)
-    pop, unit = values_by_pref(sd_pop, area_map)
-    nat, _ = values_by_pref(sd_nat, area_map)
+    area_map = {**build_area_map(sd_nat), **build_area_map(sd_pop)}
+    pop, unit, nn_pop = values_by_pref(sd_pop)
+    nat, unit_nat, nn_nat = values_by_pref(sd_nat)
+    if unit and unit_nat and unit != unit_nat:
+        logging.error("2指標の単位が違う: 人口増加率=%s / 自然増加率=%s", unit, unit_nat)
+        return 1
 
-    # 両指標が揃う都道府県のみ社会増加率を計算
+    # 両指標が揃う都道府県のみ社会増加率を計算（area code で突き合わせる）
     rows = []
-    for name in pop:
-        if name in nat:
-            rows.append({"area": name, "social": round(pop[name] - nat[name], 2),
-                         "pop": pop[name], "natural": nat[name]})
+    for code in sorted(pop):
+        if code in nat:
+            rows.append({"code": code, "area": area_map.get(code, code),
+                         "social": round(pop[code] - nat[code], 2),
+                         "pop": pop[code], "natural": nat[code]})
+    # 片方しか無い・数値でない県は落とすが、数と名前を残す
+    dropped = sorted((set(pop) ^ set(nat)) | set(nn_pop) | set(nn_nat))
+    dropped_names = [area_map.get(c, c) for c in dropped]
+    n_computed = len(rows)
     if not rows:
         logging.error("両指標が揃う都道府県がありません（time=%s を確認）", args.time)
         return 1
+    if n_computed != 47:
+        logging.warning("計算できた都道府県は %d 件（47ではない）。落とした県: %s",
+                        n_computed, "、".join(dropped_names) or "なし")
     rows.sort(key=lambda r: r["social"], reverse=True)
     if args.top_n > 0:
         rows = rows[:args.top_n]
+        scope = f"計算できた{n_computed}都道府県の中での上位{len(rows)}件のみ"
+    else:
+        scope = f"計算できた{n_computed}都道府県すべて" + ("" if n_computed == 47 else "（47に満たない）")
 
     year = args.time[:4]
     today = datetime.now().strftime("%Y%m%d")
-    slug = f"{today}_estat_social_increase_{year}"
+    slug = f"{today}_estat_social_increase_{year}" + (f"_top{args.top_n}" if args.top_n > 0 else "")
     out_csv = args.output_dir / f"{slug}.csv"
     out_meta = args.output_dir / f"{slug}_metadata.json"
 
@@ -208,8 +231,14 @@ def main() -> int:
         "fetched_at": datetime.now(timezone.utc).astimezone().isoformat(),
         "csv_sha256": sha256_of(out_csv),
         "row_count": len(rows),
-        "notes": ("社会増加率は転入超過の度合い。正＝人口流入、負＝流出。"
-                  "都道府県のみ(area 5桁末尾000)。appId はログ・metadata に出さない。"),
+        "scope": scope,
+        "pref_expected": 47,
+        "pref_computed": n_computed,
+        "dropped_prefectures": dropped_names,
+        "notes": ("社会増加率＝人口増加率−自然増加率の差（転入超過の目安。転入−転出の統計値そのものではない）。"
+                  "都道府県のみ(area 5桁末尾000)。2指標は area code で突き合わせ、"
+                  "片方が欠ける県は除外して dropped_prefectures に記録。"
+                  "appId はログ・metadata に出さない。"),
     }
     out_meta.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
                         encoding="utf-8")

@@ -1,0 +1,40 @@
+# UN WPP 2024 Medium variant 人口 上位20 — リファレンス値
+# 2024年世界人口上位は India > China > USA > Indonesia の順が確立。
+# Japan は12位前後。
+
+fetch_args: "--year 2024 --top-n 20"
+
+expected:
+  area_column: "location"
+  value_column: "population_thousand"
+  row_count: 20
+  top1_area: "India"
+  must_include_in_top5:
+    - "India"
+    - "China"
+    - "United States of America"
+    - "Indonesia"
+    - "Pakistan"
+  must_include_in_topN:
+    n: 20
+    areas:
+      - "Japan"
+      - "Russian Federation"
+      - "Brazil"
+      - "Bangladesh"
+      - "Nigeria"
+  must_not_include_anywhere:
+    # WPP には地域集計や income group も含まれる。これらが混入したら NG
+    - "WORLD"
+    - "Less developed regions"
+    - "More developed regions"
+    - "High-income countries"
+    - "Low-income countries"
+    - "Africa"
+    - "Asia"
+    - "Europe"
+  value_descending: true
+  # ★値域チェック（2026-07-21 追加）。単位は千人。実測は印1,450,936千人〜泰71,668千人。
+  #   千人と百万人・実数の取り違えを落とす幅にする。
+  value_within_range:
+    population_thousand: {min: 10000, max: 3000000}

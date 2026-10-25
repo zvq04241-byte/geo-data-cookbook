@@ -1,0 +1,28 @@
+# ILO ILOSTAT 製造業 時間賃金（USD）上位20 — リファレンス値
+# fetch.py の既定（--currency USD --top-n 20）に対応。
+# 注意: 値は ILOSTAT 更新・換算手法・国別最新年で多少変動する。
+#       そのため「厳密な順位」でなく (a)高賃金国が上位に居る (b)低賃金国が混入しない
+#       (c)降順・単位、という安定した不変条件で採点する。
+
+fetch_args: "--currency USD --top-n 20"
+
+expected:
+  row_count: 20
+  # 高賃金の製造業国は上位12に必ず居る（順位の入替はあっても圏内）
+  must_include_in_topN:
+    n: 12
+    areas: ["CHE", "NOR", "USA", "LUX"]
+  # 低賃金国が上位20に混入したら通貨フィルタ/換算のバグ。絶対に現れてはならない。
+  must_not_include_anywhere:
+    - "IND"
+    - "BGD"
+    - "PAK"
+    - "NGA"
+    - "IDN"
+    - "VNM"
+  value_descending: true
+  unit: "USD/h"
+  # ★値域チェック（2026-07-21 追加）。時間あたり賃金(USD/h)。実測は 54.14〜18.67。
+  #   月額(数千USD)をそのまま出す取り違えを落とす。
+  value_within_range:
+    Value: {min: 1, max: 200}

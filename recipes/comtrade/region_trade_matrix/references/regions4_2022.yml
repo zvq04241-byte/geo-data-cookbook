@@ -1,0 +1,18 @@
+# UN Comtrade 地域間貿易マトリクス 2022（南アジア・西アジア・アフリカ・ヨーロッパ） — リファレンス値
+# fetch.py 既定（--year 2022）の集計CSV を採点。列: src_region, dst_region, value_usd。
+# 三角貿易フロー図用。4地域 × 双方向 = 12 フロー。src でグルーピングされ値順ではない。
+# 値は年次・データ更新で変動するため、(a)構造=12フロー (b)4地域が src に出る
+#   (c)貿易額が数百億〜数千億USDの桁、という安定した不変条件で採点する。
+fetch_args: "--year 2022"
+
+expected:
+  area_column: "src_region"
+  value_column: "value_usd"
+  row_count: 12
+  # 4地域すべてが src として現れる（地域定義・ペア生成の取りこぼし検出）。
+  must_include_in_topN:
+    n: 12
+    areas: ["南アジア", "西アジア", "アフリカ", "ヨーロッパ"]
+  # 双方向貿易額の妥当範囲（最小≈500億, 最大≈3,500億USD）。生値/桁落ち・単位誤りを検出。
+  value_within_range:
+    value_usd: {min: 1000000000, max: 600000000000}

@@ -1,0 +1,39 @@
+# FAOSTAT Wheat Production 2023 Top 10 — リファレンス値
+# Phase 0.5 で確立した「集計地域混入なし」を保証するため、
+# China-aggregate / Southern Asia / Eastern Europe 等を禁止リストに入れる。
+
+fetch_args: "--item Wheat --year 2023 --top-n 10"
+
+expected:
+  row_count: 10
+  top1_area: "China, mainland"
+  must_include_in_top5:
+    - "China, mainland"
+    - "India"
+    - "Russian Federation"
+    - "United States of America"
+  must_not_include_anywhere:
+    # 集計地域 — Phase 0.5 で最も誤って混入したもの
+    - "China"  # = mainland + 台 + 港 + 澳 の集計値
+    - "World"
+    - "Africa"
+    - "Asia"
+    - "Europe"
+    - "Americas"
+    - "Oceania"
+    - "Northern Africa"
+    - "Southern Asia"
+    - "Eastern Asia"
+    - "Eastern Europe"
+    - "European Union (27)"
+    - "European Union (28)"
+    - "Least Developed Countries"
+    - "Least Developed Countries (LDCs)"
+  value_descending: true
+  year_value: 2023
+  unit: "t"
+  # ★値域チェック（2026-07-21 追加）。順位系だけでは「順位は合っているが桁が違う」
+  #   （t↔千t の取り違え、率と実数の混同など）を検出できない。実測は
+  #   1位 中国 1.366億t 〜 10位 ウクライナ 2,163万t。単位取り違えを確実に落とす幅にする。
+  value_within_range:
+    Value: {min: 5000000, max: 300000000}

@@ -43,8 +43,10 @@ OWID_CSV_URL = (
 OWID_FILENAME = "owid-energy-data.csv"
 DEFAULT_TTL_DAYS = 7
 
-# 一次エネルギー源
+# 一次エネルギー源。renewables は hydro・wind・solar・other_renewables・biofuel を含む
+#   （2026-10-26 の CSV で、5源の *_share_energy がそろう 6,379 行はすべて合計 100.000±0.002%）
 PRIMARY_SOURCES = ["coal", "oil", "gas", "nuclear", "renewables"]
+SHARE_SUM_TOL = 0.1   # 5源がそろう年の合計がこれ以上 100 から外れたら、列の意味が変わったとみて止める
 SOURCE_LABEL_JP = {
     "coal": "石炭", "oil": "石油", "gas": "天然ガス",
     "nuclear": "原子力", "renewables": "再エネ",
@@ -125,17 +127,30 @@ def find_candidates(csv_path: Path, query: str) -> list[str]:
 
 
 def to_share_rows(df: pd.DataFrame) -> list[dict]:
-    """構成比モード: 各エネルギー源の share_energy 列を抽出。"""
+    """構成比モード: 各エネルギー源の share_energy 列を抽出。
+
+    total_pct は5源がそろう年だけ出す（欠けた年は None。欠けた源は missing_sources に）。
+    5源がそろうのに合計が 100±SHARE_SUM_TOL を外れたら DataFetchError（列の定義が変わった合図）。
+    """
     rows = []
     for _, r in df.iterrows():
         row = {"year": int(r["year"])}
+        raw = {}
         for src in PRIMARY_SOURCES:
-            col = f"{src}_share_energy"
-            v = r.get(col)
-            row[f"{src}_pct"] = round(float(v), 2) if pd.notna(v) else None
-        total = sum(row[f"{s}_pct"] for s in PRIMARY_SOURCES
-                    if row[f"{s}_pct"] is not None)
-        row["total_pct"] = round(total, 2)
+            v = r.get(f"{src}_share_energy")
+            raw[src] = float(v) if pd.notna(v) else None
+            row[f"{src}_pct"] = round(raw[src], 2) if raw[src] is not None else None
+        missing = [s for s in PRIMARY_SOURCES if raw[s] is None]
+        if missing:
+            row["total_pct"] = None
+        else:
+            total = sum(raw.values())
+            if abs(total - 100) > SHARE_SUM_TOL:
+                raise DataFetchError(
+                    source="OWID", url=OWID_CSV_URL, kind="SHARE_SUM",
+                    message=f"{int(r['year'])}年の5源の合計 {total:.3f}% が 100±{SHARE_SUM_TOL} を外れた")
+            row["total_pct"] = round(total, 2)
+        row["missing_sources"] = ",".join(missing)
         rows.append(row)
     return rows
 
@@ -147,10 +162,15 @@ def to_abs_rows(df: pd.DataFrame) -> list[dict]:
         row = {"year": int(r["year"])}
         total = r.get("primary_energy_consumption")
         row["total_twh"] = round(float(total), 1) if pd.notna(total) else None
+        parts = []
         for src in PRIMARY_SOURCES:
             col = f"{src}_consumption"
             v = r.get(col)
             row[f"{src}_twh"] = round(float(v), 1) if pd.notna(v) else None
+            parts.append(row[f"{src}_twh"])
+        # ★total_twh（primary_energy_consumption）は5源の和と一致しない（2026-10-26 の CSV で 95.6〜102.9%）。
+        #   5源の和を別の列に出す。構成比を自分で割り算するときはどちらを分母にしたか書く
+        row["sum5_twh"] = round(sum(parts), 1) if all(x is not None for x in parts) else None
         rows.append(row)
     return rows
 
@@ -180,7 +200,7 @@ def save_csv(rows: list[dict], out_path: Path) -> None:
 def save_metadata(
     meta_path: Path, *, country: str, year_from: int, year_to: int, mode: str,
     metrics: list[str], cache_path: Path, out_csv: Path, row_count: int,
-    cache_age_days: float,
+    cache_age_days: float, extra: dict | None = None,
 ) -> dict:
     meta = {
         "task_name": f"owid_energy_{country.lower().replace(' ', '_')}_{year_from}_{year_to}_{mode}",
@@ -211,9 +231,12 @@ def save_metadata(
         "missing_value_treatment": "null は null として保持（推測補完なし）",
         "notes": (
             "OWID は IEA / BP / Ember 統計を統合した派生データ。原典より少し遅れて更新。"
-            "country 列に集計値 (World, OECD, EU 等) も含まれる。"
+            "country 列に集計値 (World, OECD (EI), EU 等) も含まれる。"
+            "share の total_pct は5源がそろう年だけ（そろう年は合計100%を確認済み。欠けた年は None）。"
         ),
     }
+    if extra:
+        meta.update(extra)
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     meta_path.write_text(
         json.dumps(meta, ensure_ascii=False, indent=2),
@@ -289,10 +312,21 @@ def main() -> int:
         )
         return 1
 
+    # 集計値（iso_code が空か OWID_ で始まる行。Kosovo=OWID_KOS など国もある）を指定したら知らせる
+    iso = str(df["iso_code"].dropna().iloc[0]) if df["iso_code"].notna().any() else ""
+    is_aggregate_like = (not iso) or iso.startswith("OWID_")
+    if is_aggregate_like:
+        logging.warning("'%s' は ISO3 を持たない行（地域・所得階層などの集計か、歴史的な国）。iso_code=%r",
+                        args.country, iso or None)
+
     # ─── モード別出力 ───
     metrics_list = []
     if args.mode == "share":
-        out_rows = to_share_rows(df)
+        try:
+            out_rows = to_share_rows(df)
+        except DataFetchError as e:
+            logging.error("検算で停止: %s", e)
+            return 1
     elif args.mode == "abs":
         out_rows = to_abs_rows(df)
     else:  # metrics
@@ -318,6 +352,8 @@ def main() -> int:
         year_to=args.year_to, mode=args.mode, metrics=metrics_list,
         cache_path=cache_path, out_csv=out_csv, row_count=len(out_rows),
         cache_age_days=cache_age_days,
+        extra={"iso_code": iso or None, "aggregate_like": is_aggregate_like,
+               "years_missing_sources": [r["year"] for r in out_rows if r.get("missing_sources")]},
     )
     logging.info("出力: %s (%d rows, sha256=%s…)",
                  out_csv, len(out_rows), meta["csv_sha256"][:12])
@@ -331,7 +367,8 @@ def main() -> int:
                 f"{r[f'{s}_pct']:>9.1f}" if r[f'{s}_pct'] is not None else f"{'—':>9}"
                 for s in PRIMARY_SOURCES
             )
-            print(f"  {r['year']:>4}  {vals}  {r['total_pct']:>5.1f}")
+            tot = f"{r['total_pct']:>5.1f}" if r['total_pct'] is not None else f"{'—':>5}"
+            print(f"  {r['year']:>4}  {vals}  {tot}")
     elif args.mode == "abs":
         print(f"  {'年':>4}  {'合計(TWh)':>12}  " + "  ".join(f"{SOURCE_LABEL_JP[s]:>8}(TWh)" for s in PRIMARY_SOURCES))
         for r in out_rows[-15:]:

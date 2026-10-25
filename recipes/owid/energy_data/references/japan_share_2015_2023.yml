@@ -1,0 +1,26 @@
+# OWID Energy 日本 2015-2023 share モード — リファレンス値
+# 時系列レシピ向け: ランキング系の判定は使えず、year_range と value_within_range で検証。
+#
+# 日本のエネルギーミックスの構造的事実:
+#   - 石炭は約25-28% で安定
+#   - 石油は約38-44% で長期低下傾向
+#   - 天然ガス約19-22%
+#   - 原子力は震災後低下、2015以降ゆるやかに回復 (0-4%)
+#   - 再エネは増加傾向 (7-12%)
+#   - 合計は 100% (±1%)
+
+fetch_args: "--country Japan --year-from 2015 --year-to 2023 --mode share"
+
+expected:
+  year_column: "year"
+  row_count: 9
+  year_range:
+    min: 2015
+    max: 2023
+  value_within_range:
+    coal_pct:        {min: 20, max: 35}
+    oil_pct:         {min: 30, max: 50}
+    gas_pct:         {min: 15, max: 25}
+    nuclear_pct:     {min: 0,  max: 5}
+    renewables_pct:  {min: 5,  max: 15}
+    total_pct:       {min: 99, max: 101}

@@ -1,0 +1,82 @@
+{
+ "measured_at": "2026-10-26",
+ "how": "fetch.py を metric ごとに実行した metadata から転記",
+ "format_doc": "https://www.data.jma.go.jp/stats/data/mdrr/normal/2020/doc/format_amedas.pdf",
+ "by_metric": {
+  "annual_prec": {
+   "n_csv_in_zip": 1298,
+   "n_stations_read": 1277,
+   "n_stations_with_value": 1228,
+   "no_value_reasons": {
+    "年のRMK=0": 49
+   },
+   "n_rows_years_lt_30": 192
+  },
+  "annual_snow": {
+   "n_csv_in_zip": 1298,
+   "n_stations_read": 1277,
+   "n_stations_with_value": 320,
+   "no_value_reasons": {
+    "年のRMK=0": 957
+   },
+   "n_rows_years_lt_30": 21
+  },
+  "annual_wind": {
+   "n_csv_in_zip": 1298,
+   "n_stations_read": 1277,
+   "n_stations_with_value": 873,
+   "no_value_reasons": {
+    "年のRMK=0": 404
+   },
+   "n_rows_years_lt_30": 133
+  },
+  "max_temp": {
+   "n_csv_in_zip": 1298,
+   "n_stations_read": 1277,
+   "n_stations_with_value": 904,
+   "no_value_reasons": {
+    "月のRMK=0": 372,
+    "月のRMK=08": 1
+   },
+   "n_rows_years_lt_30": 131
+  },
+  "mean_temp": {
+   "n_csv_in_zip": 1298,
+   "n_stations_read": 1277,
+   "n_stations_with_value": 903,
+   "no_value_reasons": {
+    "年のRMK=0": 374
+   },
+   "n_rows_years_lt_30": 130
+  }
+ },
+ "normals_zip_sha256": "0c9e10f7a04df02ff94c5bd57326b8b2f089464dd0d9c9e98d3d9f3b2233a776",
+ "skipped_not_in_station_table": [
+  "85131",
+  "35256",
+  "84356",
+  "84596",
+  "33871",
+  "33461",
+  "33686",
+  "34286",
+  "34231",
+  "34361",
+  "34431",
+  "36081",
+  "36766",
+  "88836",
+  "41171",
+  "61191",
+  "64261",
+  "71191",
+  "74181",
+  "81141",
+  "45147"
+ ],
+ "old_code_bugs": {
+  "1500_is": "日最低気温<0.0℃ 月・年間日数（0.1日）。旧版はこれを annual_snow として出していた",
+  "mean_temp_zero_months_example": "94086 盛山: 資料年数8年、1〜3月 RMK=0 で値0。旧版は12で割って低く出した。新版は年の RMK=0 で外す",
+  "mean_of_months_vs_annual_col": "両方 RMK=8 の903局のうち94局で0.1℃差（丸めの差）"
+ }
+}

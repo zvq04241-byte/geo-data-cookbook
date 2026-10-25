@@ -2,10 +2,10 @@
 id: oecd/sdmx_datasets
 api: oecd
 task: OECD Data Explorer（SDMX）から任意のデータフローを取得
-items: [税収Revenue Statistics, 国籍取得Acquisition of nationality, 国民経済計算, 教育, 雇用 ほか1,548データフロー]
+items: [税収Revenue Statistics, 国籍取得Acquisition of nationality, 国民経済計算, 教育, 雇用 ほか約1,550データフロー]
 tags: [oecd, sdmx, rest-api, no-auth, sdmx-csv, revenue-statistics, migration, tax]
 summary: OECD の新しい SDMX エンドポイントから CSV で取る。データフロー名にバージョン指定が必須という罠がある
-verified_at: 2026-09-15
+verified_at: 2026-10-26
 complexity: medium
 auth_required: false
 gotcha_count: 6
@@ -16,13 +16,14 @@ gotcha_count: 6
 ## 何をする
 
 OECD Data Explorer の SDMX REST から、任意のデータフローを SDMX-CSV で取る。
-**1,548データフロー**。認証不要。旧 stats.oecd.org は廃止済みで、こちらが現行。
+データフローは 2026-09-15 に 1,548、2026-10-26 に 1,552（一覧XMLの `Dataflow` 要素数。fetch.py の `dataflows()` で数えた）。増減する。
+認証不要。旧 stats.oecd.org は 2026-10-26 時点で data-explorer.oecd.org へ 301 転送される。
 
 ## API情報
 
 - データ: `https://sdmx.oecd.org/public/rest/data/<agency>,<dataflow>,<version>/<key>`
 - 構造: `https://sdmx.oecd.org/public/rest/dataflow/<agency>/<dataflow>/latest?references=all`
-- 一覧: `https://sdmx.oecd.org/public/rest/dataflow/all/all/latest`（8.9MB・XML）
+- 一覧: `https://sdmx.oecd.org/public/rest/dataflow/all/all/latest`（XML。2026-10-26 に 8,950,812 バイト）
 - 形式: SDMX-CSV（`Accept: application/vnd.sdmx.data+csv;version=1.0.0`）
 
 ## 使い方
@@ -41,17 +42,20 @@ python fetch.py --agency OECD.CTP.TPS --flow DSD_REV_COMP_OECD@DF_RSOECD \
 
 - `UNIT_MEASURE=PT_B1GQ` … **対GDP％**（`XDC`=自国通貨, `USD`, `PT_OTR_SECTOR`もある）
 - `SECTOR=S13` … 一般政府（S1311中央・S1313地方・S1314社会保障基金）
-- `STANDARD_REVENUE` … `T_2000`=社会保障負担 / `T_1000`=所得課税 / `T_5000`=消費課税 ほか75種
+- `STANDARD_REVENUE` … `T_2000`=社会保障負担 / `T_1000`=所得課税 / `T_5000`=消費課税 など。
+  日米丁仏・S13・PT_B1GQ・2018年〜で取ると 80種（2026-10-26 実測）。名称は `--dims` と同じ `?references=all` の codelist で確かめる
 
 社会保障負担率・租税負担率（対GDP）はこれで出る。
 **財務省の「国民負担率」は対国民所得**なので分母が違う。揃えるなら
 `OECD.SDD.NAD / DSD_NAMAIN10@DF_TABLE1_INCOME` の国民所得と組む。
 
 ### 国籍取得 — `OECD.ELS.IMD / DSD_MIG@DF_MIG`
-8次元 `REF_AREA.CITIZENSHIP.FREQ.MEASURE.SEX.BIRTH_PLACE.EDUCATION_LEV.UNIT_MEASURE`
+9次元 `REF_AREA.CITIZENSHIP.FREQ.MEASURE.SEX.BIRTH_PLACE.EDUCATION_LEV.UNIT_MEASURE.TIME_PERIOD`（キーは TIME_PERIOD を除く8段）
 
 - `MEASURE=B16` … **取得前の国籍別 国籍取得者数**
-- `CITIZENSHIP` … 取得前の国籍（ISO3）。`_T` は合計なので上位N国を出すとき除く
+- `CITIZENSHIP` … 取得前の国籍（ISO3）。**`W` は世界（合計）**。ほかに `W_X`（World unspecified＝国籍不明）・`STLS`（Stateless）・旧国家（`SUN_F` 等）も入る（名称は codelist で確認）。上位N国を出すとき除く
+  （2026-10-26 実測: 日本の2023年は `W`=8,800 が1位、次が KOR 2,807）
+- `SEX` は `_T`（男女計）と `F` が両方入る。絞らないと同じ国が2行になる
 
 ## ハマり所
 
@@ -76,13 +80,17 @@ TIME_PERIOD は最後の次元だがキーには含めない（`startPeriod` で
 ### 3. 単位は次元。URLでなく UNIT_MEASURE で絞る
 対GDPが欲しいのに `XDC`（自国通貨）や `USD` の行が混ざる。後フィルタが要る。
 
-### 4. 報告年が国ごとに違う
-2026-09-15 時点で 日本は2021年、アメリカ・デンマーク・フランスは2022年。
+### 4. 報告年が国・項目ごとに違う
+税収（S13・PT_B1GQ）を日米丁仏で取ると、2026-10-26 時点で4か国とも最終年は2024年だが、
+社会保障負担 `T_2000` だけ日本は2023年まで（他3か国は2024年）。最終年は更新で動く。
 「最新年」で表を作ると年が混在する。揃えるなら明示的に年を選ぶ。
+fetch.py は国ごとの最終年を metadata の `years_by_area` に書き、国で違えば stderr に出す。
 
 ### 5. 合計コードを上位N国に混ぜない
-`CITIZENSHIP=_T`（合計）が同じ列に入っている。上位3か国を出すと1位が合計になる。
+国籍取得では `CITIZENSHIP=W`（世界＝合計）が同じ列に入っている。上位3か国を出すと1位が合計になる。
+fetch.py は `_T`・`W`・`W_X`・`TOTAL` を含む列を metadata の `aggregate_codes_present` に書き、stderr に出す（落としはしない）。
 
-### 6. 一覧XMLは8.9MB
+### 6. 一覧XMLは約9MB
 `dataflow/all/all/latest` は大きい。毎回取らず、必要なデータフロー名が分かったら
 直接叩く。`--list` は一覧をキャッシュせずに毎回落とす作りなので多用しない。
+`--list` は一致を40件まで表示し、それを超えると「ほかN件」と出す。一致は dataflow の id だけを見る（agency 名では探せない）。

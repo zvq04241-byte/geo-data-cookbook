@@ -1,7 +1,7 @@
 """fetch.py — 日本の都道府県境界（Natural Earth 10m admin-1, 北方領土を北海道に統合）
 
 Natural Earth 10m admin-1 から日本の47都道府県ポリゴンを取得し、
-北方4島（択捉・国後・色丹・歯舞）をロシア(サハリン州)ポリゴンから切り出して
+北方4島（択捉・国後・色丹・歯舞）をロシア(サハリン州)ポリゴンから島単位で取り出して
 北海道に統合した GeoPackage を出力する。検証用に都道府県マニフェスト CSV も併産。
 
 ★ このレシピは「日本地図は北方領土を必ず含める」ルールの実装基準。
@@ -38,10 +38,16 @@ NE10_URL = ("https://naciscdn.org/naturalearth/10m/cultural/"
             "ne_10m_admin_1_states_provinces.zip")
 NE10_SHP_NAME = "ne_10m_admin_1_states_provinces.shp"
 
-# 北方4島の切り出し bbox（得撫島 45.7°N 以北を除くため北限 45.6°N）
+# 北方4島の切り出し bbox。島を bbox で「切る」のではなく、bbox に**丸ごと入る**島だけを取る。
+# ★旧版は intersection で切っていたため、得撫島の南端（NE 10m 5.1.1 で 149.437°E・45.584°N）が
+#   北限 45.6°N の内側に入り、得撫島の切れ端が北海道に付いていた（2026-10-26 実測。references/hoppou_measured.md）。
 NT_BBOX = (145.0, 43.0, 149.5, 45.6)
-# 北方領土を含む北海道の最東端経度の下限（択捉島東端 ≈148.8°E、根室 ≈145.8°E）
+# 北方領土を含む北海道の最東端経度の下限
+# （NE 10m 5.1.1 実測: 択捉島東端 148.856°E、統合前の北海道＝根室 145.825°E）
 HOKKAIDO_MAXLON_MIN = 147.5
+# 北方領土の島（ポリゴン）の数。NE 10m 5.1.1 では 7 面
+# （択捉・国後・色丹の3面＋歯舞群島4面）。版で変われば止めて確かめる。
+HOPPOU_PARTS_EXPECTED = 7
 
 # Natural Earth 10m admin-1 の name（長音符付き）→ 日本語都道府県名
 NE_NAME_TO_JP = {
@@ -121,12 +127,30 @@ def build_prefectures(shp: Path):
     # ── 北方4島をロシア(サハリン州)から切り出して北海道へ統合 ──
     nt_box = sbox(*NT_BBOX)
     russia = world[world["admin"] == "Russia"]
-    nt_geoms = []
-    for geom in russia.geometry:
-        if geom.intersects(nt_box):
-            clipped = geom.intersection(nt_box)
-            if not clipped.is_empty and clipped.area > 0:
-                nt_geoms.append(clipped)
+    nt_geoms, nt_sources, nt_partial = [], [], []
+    for _, rrow in russia.iterrows():
+        geom = rrow.geometry
+        if not geom.intersects(nt_box):
+            continue
+        for part in getattr(geom, "geoms", [geom]):
+            if part.within(nt_box):
+                nt_geoms.append(part)
+                nt_sources.append(str(rrow.get("name")))
+            elif part.intersects(nt_box):
+                # bbox に一部だけ掛かる島（得撫島など）は取らない。何を外したか記録する
+                nt_partial.append([round(x, 3) for x in part.bounds])
+    if len(nt_geoms) != HOPPOU_PARTS_EXPECTED:
+        raise DataFetchError(
+            source="Natural Earth", url=NE10_URL, kind="HOPPOU_PARTS_MISMATCH",
+            message=(f"bbox に丸ごと入る島が {len(nt_geoms)} 面（想定 {HOPPOU_PARTS_EXPECTED}）。"
+                     f"出所 {sorted(set(nt_sources))}。NE の版を確かめる。"))
+    hoppou_info = {
+        "parts": len(nt_geoms),
+        "source_admin1": sorted(set(nt_sources)),
+        "part_bounds": [[round(x, 3) for x in g.bounds] for g in
+                        sorted(nt_geoms, key=lambda g: -g.area)],
+        "excluded_partial_bounds": nt_partial,
+    }
     hoppou_added = False
     if nt_geoms:
         hk_mask = japan["pref_jp"] == "北海道"
@@ -140,7 +164,26 @@ def build_prefectures(shp: Path):
             hoppou_added = True
 
     japan = japan.to_crs("EPSG:4326")
-    return japan, hoppou_added
+    hoppou_info["added"] = hoppou_added
+    return japan, hoppou_info
+
+
+def assert_47(japan) -> None:
+    """47面・県名が NE_NAME_TO_JP の47県名と一致することを確かめる（欠け・名前の取り違えで止める）。"""
+    want = set(NE_NAME_TO_JP.values())
+    got = japan["pref_jp"]
+    bad = []
+    if len(japan) != 47:
+        bad.append(f"行数 {len(japan)}≠47")
+    if got.isna().any():
+        bad.append(f"県名なし {int(got.isna().sum())}行")
+    if got.duplicated().any():
+        bad.append(f"重複 {sorted(got[got.duplicated()].dropna())}")
+    if set(got.dropna()) != want:
+        bad.append(f"欠け {sorted(want - set(got.dropna()))} / 余分 {sorted(set(got.dropna()) - want)}")
+    if bad:
+        raise DataFetchError(source="Natural Earth", url=NE10_URL,
+                             kind="PREF_SET_MISMATCH", message="; ".join(bad))
 
 
 def assert_hoppou(japan, *, gpd_mod) -> float:
@@ -202,8 +245,18 @@ def main() -> int:
         logging.error("ダウンロード失敗: %s", e)
         return 1
 
-    japan, hoppou_added = build_prefectures(shp)
-    logging.info("都道府県数: %d / 北方領土統合: %s", len(japan), hoppou_added)
+    try:
+        japan, hoppou_info = build_prefectures(shp)
+        assert_47(japan)
+    except DataFetchError as e:
+        logging.error("検証失敗: %s", e)
+        return 1
+    hoppou_added = hoppou_info["added"]
+    logging.info("都道府県数: %d / 北方領土統合: %s（%d面）", len(japan), hoppou_added,
+                 hoppou_info["parts"])
+    if hoppou_info["excluded_partial_bounds"]:
+        logging.info("bbox に一部だけ掛かったため取らなかった島: %s",
+                     hoppou_info["excluded_partial_bounds"])
 
     # ★ 不可欠条件: 北方領土が北海道に含まれているか
     try:
@@ -232,10 +285,12 @@ def main() -> int:
         "hoppou_integrated": hoppou_added,
         "hokkaido_max_lon": round(hk_maxlon, 4),
         "nt_bbox": NT_BBOX,
+        "hoppou": hoppou_info,
+        "scope": "日本の47都道府県（Natural Earth 10m の収録範囲。沖ノ鳥島は収録されていない）",
         "gpkg_sha256": sha256_of(gpkg),
         "csv_sha256": sha256_of(csv_path),
-        "notes": ("北方4島はロシア(サハリン州)ポリゴンに含まれるため bbox で切り出し北海道へ統合。"
-                  "得撫島(45.7°N〜)を除くため北限45.6°N。NE名はマクロン付きで join。"),
+        "notes": ("北方4島はロシア(サハリン州)ポリゴンに含まれるため、bbox に丸ごと入る島だけを北海道へ統合。"
+                  "bbox に一部だけ掛かる島（得撫島の南端）は取らない。NE名はマクロン付きで join。"),
     }
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
                          encoding="utf-8")

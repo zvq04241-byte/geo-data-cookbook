@@ -1,0 +1,20 @@
+# 国土数値情報 N03 市区町村境界 新潟県(15) 2020 — リファレンス値
+# fetch.py 既定（--pref-code 15 --year 2020）の面積降順マニフェスト CSV を採点。
+# 幾何そのものは GPKG。CSV は構造（市区町村数・主要市の存在・面積レンジ・降順）の検証用。
+# 37 = 新潟県30市町村 − 新潟市 1 + 新潟市の区 8（2026-10-26 に実行して確認）。
+
+fetch_args: "--pref-code 15 --year 2020"
+
+expected:
+  row_count: 37
+  # 面積最大は村上市（新潟県北部の広域市）で決定的
+  top1_area: "村上市"
+  # 主要市が全て含まれる（n=37=全件中に存在）。cp932 読み失敗なら文字化けで欠落
+  must_include_in_topN:
+    n: 37
+    areas: ["長岡市", "上越市", "村上市"]
+  # 市区町村面積が妥当な範囲（CRS取り違え・座標破損を検出）
+  value_within_range:
+    Value: {min: 0.5, max: 2000}
+  value_descending: true
+  unit: "km2"

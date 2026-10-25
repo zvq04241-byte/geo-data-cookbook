@@ -7,3 +7,4 @@ out/
 *.csv
 *.json
 !**/metadata.json
+!recipes/*/*/references/*

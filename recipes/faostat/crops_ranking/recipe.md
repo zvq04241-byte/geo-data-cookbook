@@ -14,14 +14,14 @@ gotcha_count: 7
 experiment_validated: true  # Phase 0.5 で cookbook 効果を実証したリファレンスレシピ
 ---
 
-## ⚠ 2026-08-20 追記：集計地域名は改称される
+## ⚠ 集計地域は Area Code で落とす（2026-10-26 に名前方式から切り替え）
 
 `Least Developed Countries` は FAO 側で **`Least Developed Countries (LDCs)`** に改称されており、
-完全一致の除外リストから漏れて Rice/2024 の第3位に混入していた（2億t超＝インド・中国に次ぐ位置）。
-**除外は完全一致で行うため、FAO が表記を変えると静かに壊れる。**
-新しい作物・年で使うときは、上位に不自然な巨大値が出ていないか必ず目視する。
-2026-08-20 に全233地域名を監査した結果、漏れはこの1件のみだった（監査キーワード＝
-Countries/Developing/Income/European Union/World/大陸名 等）。
+名前の完全一致リストから漏れて Rice/2024 の第3位に混入していた（2026-08-20）。
+名前で落とす方式は、FAO が表記を変えると静かに壊れる。
+**今の fetch.py は Area Code で落とす**: 5000以上（地域集計）と China 351 等（国のふりをした集計値。
+ワークスペースでは `lib.bulk_data.FAOSTAT_AGGREGATE_AREAS` が正本、単体では fetch.py 内の写し）。
+名前方式は解体前の国（USSR 等）まで落としていた。照合の記録は `references/aggregate_codes_audit_20261026.md`。
 
 ## ⚡ このレシピが解決した実証済み問題（Phase 0.5 実験）
 
@@ -71,8 +71,8 @@ python fetch.py --item Wheat --year 2023 --top-n 10 --output-dir ./output
 ```
 
 ### 出力
-- `output/YYYYMMDD_faostat_wheat_2023_top10.csv` — Rank/Area/Item/Element/Year/Value/Unit
-- `output/YYYYMMDD_faostat_wheat_2023_top10_metadata.json` — 出典URL/SHA256/行数/取得時刻
+- `output/YYYYMMDD_faostat_wheat_2023_top10.csv` — Rank/Area Code/Area/Item/Element/Year/Value/Unit/Flag/estimated
+- `output/YYYYMMDD_faostat_wheat_2023_top10_metadata.json` — 出典URL/SHA256/行数/取得時刻/`scope`（順位を付けた母集団と国・地域数）/出力中の Flag の内訳
 
 ## ハマり所（重要）
 
@@ -81,7 +81,8 @@ FAOSTAT CSV は **UTF-8**。`encoding="latin-1"` で読むと `TÃ¼rkiye` の�
 古いコード例で `latin-1` を見ても真似しない。
 
 ### 2. 集計地域の混入（最重要）
-Area 列に国名と集計地域が混在する。ランキング前に必ず除外（`AGG_AREAS` セット参照）。
+Area 列に国名と集計地域が混在する。ランキング前に必ず除外する。**判定は Area Code で行う**（`is_aggregate_code`）。
+名前の一覧で落とすと、改称で漏れる（上の注記）。以下は Area Code で落ちることを確かめた代表例。
 
 特に **見落としやすいアグリゲート**:
 - `China` — FAOSTAT 仕様: `China` = `China, mainland` + `Taiwan` + `Hong Kong SAR` + `Macao SAR` の合計。
@@ -89,11 +90,11 @@ Area 列に国名と集計地域が混在する。ランキング前に必ず除
 - `Australia and New Zealand` — 大洋州の地理集計
 - `Land Locked Developing Countries (LLDCs)` — **末尾 s 付き**で出ることがある。`LLDC` だけ除外していると漏れる。両形を含めること
 - `European Union (27)` / `European Union (28)` — 加盟国数で複数表記
-- `Belgium-Luxembourg` / `USSR` / `Yugoslav SFR` 等 — 古い年データに残る歴史的アグリゲート
+- `Belgium-Luxembourg` / `USSR` / `Yugoslav SFR` 等 — 解体前の国（Area Code は5000未満）。後継国と年が重ならないので、**古い年の順位では残す**（以前の名前方式はこれも落としていた）
 
 - **貿易（TCL）の `China (excluding intra-trade)`（265）と EU12/15/25/27 の excluding intra-trade（261/266/268/269）**（2026-10-20 追記）。
   コードが5000未満なので「5000以上は集計」の規則では落ちない。これを国として足すと中国を二重に数える
-  （授業ライブ作図の事実確認で、中国の大豆輸入の割合を37%と誤った。正しくは60%）。
+  （中国の大豆輸入の割合を、正しくは約6割のところ37%と誤った例がある）。
   保管庫経由なら `lib.bulk_data.read_faostat` の既定（`FAOSTAT_AGGREGATE_AREAS`）で落ちる。**国はコードで選ぶ**（中国は41）
 
 実測例（2026-05-18 検証時の Wheat 2023）:
@@ -125,6 +126,8 @@ ZIP 内には本体 CSV 以外に Flag/AreaCode/ItemCode/Element 等のメタCSV
 ### 7. 推計・補完の値（Flag E / I）に印を付ける（2026-10-20）
 `Flag` 列の **E**（推計）と **I**（補完）は、各国の公表値ではない。図・表に出すときは値に＊を付け、
 「＊は FAO の推計値」と注記する。上位N の境目に推計値が来るときは、順位の結論を強めない。
+出力 CSV に `Flag` と `estimated`（E か I を含めば True）を残している（別名の品目を合算した国は Flag を並べる）。
+X は他機関の値（FAO の推計ではない）。2023年の作物生産量では A 43%・I 30%・E 20%・X 5%（行数比。記録は references/）。
 
 ## 効くケース
 - 単一作物 × 単一年 × 国別上位N
@@ -159,7 +162,7 @@ ZIP 内には本体 CSV 以外に Flag/AreaCode/ItemCode/Element 等のメタCSV
 
 新規の類似データ取得スクリプトを書くとき：
 1. **ITEM_ALIASES のパターンを真似ろ** — どんな統計APIでも品目名は揺れる
-2. **AGG_AREAS のような除外集合を必ず用意しろ** — 集計値の混入は典型的バグ
+2. **集計値はコードで落とせ** — 名前の除外集合は改称で漏れる。Area Code の規則（5000以上）＋国のふりをした集計値（China 351）
 3. **chunk読み込みで大容量CSVに対応しろ** — メモリ管理を怠ると死ぬ
 4. **metadata.json を必ず出せ** — 教材出典追跡に必須
 5. **`--csv` のような既存ファイル迂回オプションを残せ** — テスト・開発時に再ダウンロード時間を節約できる

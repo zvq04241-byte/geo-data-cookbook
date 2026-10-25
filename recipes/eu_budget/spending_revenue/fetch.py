@@ -62,12 +62,23 @@ def parse(xlsx, year):
     d = pd.read_excel(xlsx, sheet_name=str(year), header=None)
     iso = re.compile(r"^[A-Z]{2}$")
     # 見出し行＝国コードが最も多く並ぶ行（年で位置が違う）
-    hr = max(range(min(25, len(d))), key=lambda i: sum(bool(iso.match(str(v).strip())) for v in d.iloc[i]))
-    head = [str(v).strip() for v in d.iloc[hr]]
+    # ★見出しに注の印が付く年がある（2022年は "LU*"）。印を外さないとその国が黙って落ちる
+    norm = lambda v: str(v).strip().rstrip("*").strip()
+    hr = max(range(min(25, len(d))), key=lambda i: sum(bool(iso.match(norm(v))) for v in d.iloc[i]))
+    head = [norm(v) for v in d.iloc[hr]]
     agg_col = next(j for j, v in enumerate(head) if v.startswith("EU-"))
+    left_codes = [v for j, v in enumerate(head) if j < agg_col and iso.match(v)]
+    if left_codes:
+        sys.exit(f"{year}年: EU集計の列より左に国コードがある {left_codes}（シートの作りが変わった）")
     # ★加盟前の国にも列がある（加盟前支援の受取が入る）。その年の加盟国だけを残す
     members = [(j, v) for j, v in enumerate(head) if j > agg_col and iso.match(v)
                and JOINED.get(v, 0) <= year and LEFT.get(v, 9999) >= year]
+    # 加盟国の数 ＝ EU集計の列名の数（EU-27 なら27）。合わなければ止める（列の取りこぼし・集計列の混入）
+    n_expected = int(re.search(r"\d+", head[agg_col]).group())
+    if len(members) != n_expected:
+        got = {v for _, v in members}
+        sys.exit(f"{year}年: 加盟国の列が {len(members)} 本（{head[agg_col]} なら {n_expected} 本）。"
+                 f"足りない/余分: {sorted(set(NAMES) - got - set(LEFT))} / {sorted(got - set(NAMES))}")
 
     def find(label):
         for i in range(len(d)):
@@ -117,6 +128,9 @@ def main():
     ng = rows.get("ngeu") if a.with_ngeu else None
     if a.with_ngeu and ng is None:
         sys.exit(f"{a.year}年のシートに TOTAL NGEU が無い（2021年〜）")
+    if ng is not None:
+        s = float(sum(v for v in ng["vals"].values() if pd.notna(v)))
+        checks["ngeu"] = {"sum_members": round(s, 1), "eu_column": round(ng["agg"], 1), "ok": abs(s - ng["agg"]) < 1.0}
 
     want = [c.strip().upper() for c in a.countries.split(",")] if a.countries else [c for _, c in members]
     table = []
@@ -140,7 +154,10 @@ def main():
         "source": {"name": "European Commission, EU spending and revenue 2000-20XX", "page": PAGE, "url": url,
                    "file": xlsx.name, "file_sha256": sha256_of(xlsx), "sheet": str(a.year), "single_source": True},
         "query": {"receipts_row": ROWS["receipts"] + (" + TOTAL NGEU" if ng else ""),
-                  "payments_row": ROWS[a.payments], "aggregate_column": agg, "countries": want},
+                  "payments_row": ROWS[a.payments], "aggregate_column": agg, "countries": want,
+                  "members_in_sheet": len(members)},
+        "scope": (f"{a.year}年の全加盟国（{agg}・{len(members)}か国）" if not a.countries
+                  else f"指定した{len(want)}か国のみ（{agg} {len(members)}か国のうち）。並びは指定国の中での差引順"),
         "units": "百万ユーロ（EUR million）",
         "fetched_at": datetime.datetime.now().astimezone().isoformat(),
         "csv_sha256": sha256_of(csv_path),

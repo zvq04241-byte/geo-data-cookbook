@@ -121,6 +121,12 @@ def fetch_estat(
                         source="e-Stat", url=safe_url, kind="API_ERROR",
                         message=str(result_info.get("ERROR_MSG", "unknown")),
                     )
+                ri = (data.get("STATISTICAL_DATA", {}) or {}).get("RESULT_INF", {}) or {}
+                if ri.get("NEXT_KEY"):   # limit 超過。残りは返らないので黙って欠けないよう止める
+                    raise DataFetchError(
+                        source="e-Stat", url=safe_url, kind="TRUNCATED",
+                        message=f"limit={limit} を超えた（TOTAL_NUMBER={ri.get('TOTAL_NUMBER')}）。--area や --time で絞って分けて取る",
+                    )
                 return data, safe_url
         except httpx.HTTPError as e:
             last_err = e
@@ -168,7 +174,7 @@ def is_city(code: str) -> bool:
     """
     if len(code) != 5 or code.endswith("000") or code == "00000":
         return False
-    if "13101" <= code <= "13123":  # 東京23区は市区町村ではない
+    if "13101" <= code <= "13123":  # 方針として東京23区（特別区）を除く。除いたことは metadata の scope に書く
         return False
     return True
 
@@ -185,6 +191,8 @@ def classify_into_n(values: list[tuple[str, float, str]], n_classes: int) -> lis
     """
     sorted_vals = sorted(values, key=lambda x: x[1], reverse=True)
     n_total = len(sorted_vals)
+    if n_classes > n_total:   # size=0 になり、黙って1階級に潰れるのを防ぐ
+        raise ValueError(f"階級数 {n_classes} が件数 {n_total} より多い")
     size = n_total // n_classes
     classes = []
     for i in range(n_classes):
@@ -234,8 +242,9 @@ def save_csv(rows: list[dict], out_path: Path) -> None:
 
 def save_metadata(
     meta_path: Path, *, stats_data_id: str, cd_cat01: str, cd_time: str,
-    classify_n: int, title: str, units: str, request_url: str,
-    out_csv: Path, row_count: int, class_count: int,
+    classify_n: int, title: str, units, request_url: str,
+    out_csv: Path, row_count: int, class_count: int, extra_query: dict = None,
+    extra: dict = None,
 ) -> dict:
     meta = {
         "task_name": f"estat_{stats_data_id}_{cd_cat01}_{cd_time}_classify{classify_n}",
@@ -250,6 +259,7 @@ def save_metadata(
             "cd_cat01": cd_cat01,
             "cd_time": cd_time,
             "classify_n": classify_n,
+            **(extra_query or {}),
             "table_title": title,
             "request_url": request_url,
         },
@@ -259,7 +269,8 @@ def save_metadata(
         "csv_size_bytes": out_csv.stat().st_size,
         "row_count": row_count,
         "class_count": class_count,
-        "missing_value_treatment": "公表値なしは行スキップ（推測補完なし）",
+        "missing_value_treatment": "公表値なし（数値でない値）は行スキップ（推測補完なし）。落とした数は skipped_non_numeric",
+        **(extra or {}),
         "notes": (
             "都道府県別データを N階級分類（教材階級区分図用）。"
             "area code 5桁・末尾000のみ抽出（市区町村は --city-only オプション）。"
@@ -344,20 +355,42 @@ def main() -> int:
     # ─── area filter ───
     filter_fn = is_city if args.city_only else is_prefecture
     rows: list[tuple[str, float, str]] = []
-    unit = ""
+    codes: list[str] = []
+    skipped: list[str] = []
+    n_tokyo_wards = 0
     for v in values:
         area_code = v.get("@area", "")
+        if args.city_only and "13101" <= area_code <= "13123":
+            n_tokyo_wards += 1
         if not filter_fn(area_code):
             continue
         try:
             num = float(str(v.get("$", "")).replace(",", ""))
         except (ValueError, TypeError):
+            skipped.append(f"{area_code}:{v.get('$')}")
             continue
         name = area_map.get(area_code, area_code)
         u = v.get("@unit", "")
-        if u:
-            unit = u
         rows.append((name, num, u))
+        codes.append(area_code)
+    units = sorted({r[2] for r in rows if r[2]})
+    unit = units[0] if len(units) == 1 else "/".join(units)
+    if len(units) > 1:
+        logging.warning("単位が混在: %s（別の指標が混ざっていないか --cat01 等を確かめる）", units)
+    # 同じ地域が2回以上ある＝別の指標・年次が混ざっている（--cat01 や --time の指定漏れ）。順位を付けずに止める
+    dup = sorted({c for c in codes if codes.count(c) > 1})
+    if dup:
+        logging.error("同じ地域が複数回ある（%d地域、例 %s）。--cat01/--cat02/--tab/--time で1指標・1時点に絞る",
+                      len(dup), dup[:5])
+        return 1
+    if skipped:
+        logging.warning("数値でない値で落とした地域 %d 件: %s", len(skipped), skipped[:10])
+    if args.city_only:
+        scope = (f"市区町村 {len(rows)}件（東京23区 13101〜13123 を除く"
+                 f"{'・除いた値 ' + str(n_tokyo_wards) + '件' if n_tokyo_wards else ''}）")
+    else:
+        scope = (f"{len(rows)}都道府県" + ("すべて" if len(rows) == 47 else "（47に満たない）")
+                 + (f"・--area {args.area} で絞った" if args.area else ""))
 
     if not rows:
         logging.error(
@@ -370,7 +403,11 @@ def main() -> int:
 
     # ─── 階級分類 ───
     if args.classify_n > 0:
-        classes = classify_into_n(rows, args.classify_n)
+        try:
+            classes = classify_into_n(rows, args.classify_n)
+        except ValueError as e:
+            logging.error("%s", e)
+            return 1
     else:
         # 分類しない: 全件を1クラスに
         classes = [{
@@ -380,6 +417,10 @@ def main() -> int:
         }]
 
     csv_rows = to_csv_rows(classes)
+    # 順位で切るので、同じ値が隣の階級に割れることがある。割れた境目の数を残す
+    boundary_ties = sum(1 for a_, b_ in zip(classes, classes[1:]) if a_["range_lo"] == b_["range_hi"])
+    if boundary_ties:
+        logging.warning("同じ値が階級の境目で割れた: %d か所", boundary_ties)
 
     # ─── 出力 ───
     today = datetime.now().strftime("%Y%m%d")
@@ -394,6 +435,12 @@ def main() -> int:
         classify_n=args.classify_n, title=title, units=unit,
         request_url=request_url, out_csv=out_csv,
         row_count=len(csv_rows), class_count=len(classes),
+        extra_query={"cd_cat02": args.cat02, "cd_cat03": args.cat03, "cd_tab": args.tab,
+                     "cd_area": args.area, "city_only": args.city_only},
+        extra={"scope": scope, "units_found": units, "skipped_non_numeric": skipped,
+               "excluded_tokyo_wards": n_tokyo_wards if args.city_only else 0,
+               "boundary_ties": boundary_ties,
+               "class_rule": "件数で均等に切る（順位で切る。値の分位点ではない）" if args.classify_n > 0 else "分類しない"},
     )
     logging.info("出力: %s (%d rows, %d classes, sha256=%s…)",
                  out_csv, len(csv_rows), len(classes), meta["csv_sha256"][:12])

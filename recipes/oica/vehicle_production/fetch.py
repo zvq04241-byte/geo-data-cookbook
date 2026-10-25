@@ -14,6 +14,7 @@ OICA(国際自動車工業連合会)は世界の自動車生産の一次出典�
   python fetch.py --year 2024 --measure cars --output-dir ./output   # 乗用車のみ
   python fetch.py --year 2000 --measure all  --output-dir ./output   # archive.orgの2000年公式
 """
+from __future__ import annotations
 import argparse, csv, json, re, subprocess, sys, datetime, urllib.request
 from pathlib import Path
 
@@ -34,13 +35,18 @@ ARCHIVE = {
 }
 ARCHIVE_YEARS = [1999, 2000]
 
-# EU27（現27か国）判定用キー（各PDFの表記ゆれ込み・大文字先頭一致）
-EU27_KEYS = {
-    "AUSTRIA", "BELGIUM", "BULGARIA", "CROATIA", "CYPRUS", "CZECH", "DENMARK", "DANEMARK",
-    "ESTONIA", "FINLAND", "FRANCE", "GERMANY", "GREECE", "HUNGARY", "IRELAND", "ITALY",
-    "LATVIA", "LITHUANIA", "LUXEMBOURG", "MALTA", "NETHERLANDS", "POLAND", "PORTUGAL",
-    "ROMANIA", "SLOVAK", "SLOVENIA", "SPAIN", "SWEDEN",
+# EU27（現27か国）の国名。PDF の行ラベル（脚注・注記を外し大文字にしたもの）と**完全一致**で照合する。
+# 表記ゆれ: OICA 2000年版は DANEMARK・SLOVAK REPUBLIC、直近版は SLOVAKIA・CZECH REPUBLIC。
+EU27_NAMES = {
+    "AUSTRIA": "AT", "BELGIUM": "BE", "BULGARIA": "BG", "CROATIA": "HR", "CYPRUS": "CY",
+    "CZECH REPUBLIC": "CZ", "CZECHIA": "CZ", "DENMARK": "DK", "DANEMARK": "DK", "ESTONIA": "EE",
+    "FINLAND": "FI", "FRANCE": "FR", "GERMANY": "DE", "GREECE": "GR", "HUNGARY": "HU",
+    "IRELAND": "IE", "ITALY": "IT", "LATVIA": "LV", "LITHUANIA": "LT", "LUXEMBOURG": "LU",
+    "MALTA": "MT", "NETHERLANDS": "NL", "POLAND": "PL", "PORTUGAL": "PT", "ROMANIA": "RO",
+    "SLOVAKIA": "SK", "SLOVAK REPUBLIC": "SK", "SLOVENIA": "SI", "SPAIN": "ES", "SWEDEN": "SE",
 }
+EU15_CODES = {"AT", "BE", "DK", "FI", "FR", "DE", "GR", "IE", "IT", "LU", "NL", "PT", "ES", "SE"}
+assert len(set(EU27_NAMES.values())) == 27
 
 
 def download(url: str, dest: Path) -> Path:
@@ -61,79 +67,127 @@ def pdf_layout_text(path: Path) -> str:
         sys.exit("! pdftotext(poppler) が必要です（brew install poppler）。列の分離に不可欠。")
 
 
-def parse_rows(text: str) -> dict:
-    """{ラベル(大文字): [int,...]} 。列は2つ以上の空白で区切られている前提（-layout）。
-    ラベル直後から%を含むセルの手前までの数値セルを値列とする。"""
+NUM = re.compile(r"(?<!\S)(\d{1,3}(?: \d{3})*|N/A)(?!\S)")
+
+
+def parse_rows(text: str, years: list[int]) -> dict:
+    """{ラベル: {"vals": {年: int|None}, "flag": 注記, "raw": 元ラベル}}。
+
+    値は**見出しの年の列位置**に割り当てる（空欄の列があっても左に詰めない）。
+    旧版は空欄を詰めて読み、2000年版の DANEMARK（2000年だけ 18台）を1999年の値にしていた。
+    """
+    lines = text.splitlines()
+    tok = lambda y: rf"(?<!\S){y}(?!\S)"          # 「1999-2000」のような題の中の年は見出しにしない
+    head = next((ln for ln in lines if all(re.search(tok(y), ln) for y in years)), None)
+    if head is None:
+        raise ValueError(f"見出しに年 {years} がそろう行が無い")
+    ends = [re.search(tok(y), head).end() for y in years]
     out = {}
-    for raw in text.splitlines():
-        line = raw.rstrip()
-        if not line.strip():
+    for line in lines:
+        m = re.match(r"\s*(\S.*?)(?=\s{2,}|$)", line)
+        if not m:
             continue
-        cells = re.split(r"\s{2,}", line.strip())     # 列= 2+スペース区切り
-        if len(cells) < 2:
-            continue
-        label = re.sub(r"\(\d+\)|,.*$", "", cells[0]).strip().upper()  # 脚注(1)/注記",cars only"除去
+        raw = m.group(1).strip()
+        label = re.sub(r"\(\d+\)", "", raw)
+        flag = ""
+        if "," in label:
+            label, flag = label.split(",", 1)
+            flag = flag.strip()
+        label = re.sub(r"^-\s*", "", label).strip().upper()
         if not re.match(r"^[A-Z]", label):
             continue
-        vals = []
-        for c in cells[1:]:
-            c = c.strip()
-            if "%" in c or not c:
+        vals = {}
+        for t in NUM.finditer(line, m.end()):
+            if t.end() > ends[-1] + 12:          # 年の列より右（増減率など）は読まない
                 break
-            if re.fullmatch(r"[\d ]+", c):            # 数値セル（内部空白=千位）
-                vals.append(int(c.replace(" ", "")))
-            else:
-                break                                  # 相手先(VDA等)テキストで打切り
-        if vals:
-            out.setdefault(label, vals)
+            i = min(range(len(ends)), key=lambda k: abs(ends[k] - t.end()))
+            if years[i] in vals:                 # 組版で右にずれて詰まったセル（例「29 891 N/A」）は右の空き列へ
+                free = [k for k in range(i + 1, len(ends)) if years[k] not in vals]
+                if not free:
+                    raise ValueError(f"1つの列に2つの値: {raw!r} {years[i]}")
+                i = free[0]
+            vals[years[i]] = None if t.group(1) == "N/A" else int(t.group(1).replace(" ", ""))
+        if vals and label not in out:
+            out[label] = {"vals": vals, "flag": flag, "raw": raw}
     return out
 
 
-def val_at(rows, label_key, col):
-    for lab, vals in rows.items():
-        if lab == label_key and len(vals) > col:
-            return vals[col]
-    return None
+def v_of(rows, label, y):
+    r = rows.get(label)
+    return None if r is None else r["vals"].get(y)
 
 
-def is_member(lab):
-    return any(lab.startswith(k) for k in EU27_KEYS) and "DOUBLE" not in lab and "EUROPEAN" not in lab
-
-
-def compute_eu27(rows, col):
-    """EU27合計。直近PDFは公式行"EUROPEAN UNION 27 countries + UK"−UK。
-    2000年は EU15行が無EU27なので 加盟国合算 − EU27内二重計上 で構成。"""
-    reg = uk = None
-    for lab, vals in rows.items():
-        if len(vals) <= col:
+def dc_rows(rows, y, codes: set):
+    """Double Countings のうち、両方の国が codes に入る行の (ラベル, 値)。"""
+    hits = []
+    for lab, r in rows.items():
+        if not lab.startswith("DOUBLE COUNTINGS"):
             continue
-        if lab.startswith("EUROPEAN UNION 27 COUNTRIES"):
-            reg = vals[col]
-        if lab.startswith("UNITED KINGDOM"):
-            uk = vals[col]
-    if reg is not None and uk is not None:
-        return reg - uk, f"公式EU27+UK({reg:,})−UK({uk:,})"
-    # 2000年など：加盟国合算 − EU27内二重計上
-    members = {lab: vals[col] for lab, vals in rows.items() if is_member(lab) and len(vals) > col}
-    dbl = 0
-    for lab, vals in rows.items():
-        if "DOUBLE" in lab and len(vals) > col:
-            parties = [k for k in EU27_KEYS if k in lab]
-            if len(parties) >= 2:                     # 両者ともEU27 → 重複を1回控除
-                dbl += vals[col]
-    total = sum(members.values()) - dbl
-    return total, f"加盟{len(members)}か国合算−二重計上{dbl:,}"
+        parties = [x.strip() for x in lab[len("DOUBLE COUNTINGS"):].split("/")]
+        cc = [EU27_NAMES.get(x) for x in parties]
+        if len(cc) == 2 and all(c in codes for c in cc if c) and all(cc):
+            v = r["vals"].get(y)
+            if v:
+                hits.append((lab, v))
+    return hits
 
 
-def pick(rows, key, col):
-    """国名で行を引く（Double Countings/地域行は除外・startswith優先）。"""
-    for lab, vals in rows.items():
-        if lab.startswith(key) and "DOUBLE" not in lab and "EUROPEAN" not in lab:
-            return lab, (vals[col] if len(vals) > col else None)
-    for lab, vals in rows.items():
-        if key in lab and "DOUBLE" not in lab and "EUROPEAN" not in lab:
-            return lab, (vals[col] if len(vals) > col else None)
-    return None, None
+TOL = 0.002   # 小計と内訳の和の差の許容（0.2%）。直近PDFは EU15 小計が内訳の和より最大21,000台（0.12%）小さい年がある
+
+
+def _check(name_a, a, name_b, b):
+    """小計と内訳の和を照らす。一致／差の記録／止める（差が TOL を超える）。"""
+    if a == b:
+        return f"{name_a} ＝ {name_b}（一致）"
+    if abs(a - b) > TOL * a:
+        raise ValueError(f"{name_a} と {name_b} {b:,} の差 {b - a:+,} が {TOL:.1%} を超える")
+    print(f"  ! {name_a} と {name_b} {b:,} が {b - a:+,} 台ずれる（OICA の表のまま。値は小計の行を使う）")
+    return f"{name_a} と {name_b} {b:,} の差 {b - a:+,}（OICA の表の小計と内訳が合わない。値は小計の行による）"
+
+
+def compute_eu27(rows, y):
+    """EU27合計と、照合・内訳の記録を返す。照合が合わなければ止める。"""
+    members = {lab: r for lab, r in rows.items() if lab in EU27_NAMES}
+    present = {lab: r["vals"].get(y) for lab, r in members.items() if r["vals"].get(y) is not None}
+    found_codes = {EU27_NAMES[lab] for lab in present}
+    absent = sorted(set(EU27_NAMES.values()) - found_codes)
+    uk = v_of(rows, "UNITED KINGDOM", y)
+    info = {"members_in_table": {lab: v for lab, v in present.items()},
+            "eu27_countries_not_in_table": absent,
+            "member_flags": {lab: members[lab]["flag"] for lab in present if members[lab]["flag"]}}
+    reg = v_of(rows, "EUROPEAN UNION 27 COUNTRIES + UK", y)
+    if reg is not None:
+        if uk is None:
+            raise ValueError("UNITED KINGDOM の行が無い")
+        s = sum(present.values()) + uk
+        info["check"] = _check(f"公式行 EU27+UK {reg:,}", reg, f"表の加盟国{len(present)}か国＋英国 の和", s)
+        return reg - uk, f"公式EU27+UK({reg:,})−UK({uk:,})", info
+    # 2000年: EU27 の行は無い（当時の区分は EU15）。EU15 行で照合してから、現27か国で組む
+    eu15 = v_of(rows, "EUROPEAN UNION", y)
+    if eu15 is None or uk is None:
+        raise ValueError("EU27+UK 行も EUROPEAN UNION 行も無い（照合の相手が無いので止める）")
+    p15 = {lab: v for lab, v in present.items() if EU27_NAMES[lab] in EU15_CODES}
+    d15 = dc_rows(rows, y, EU15_CODES)
+    s15 = sum(p15.values()) + uk - sum(v for _, v in d15)
+    chk = _check(f"当時の EUROPEAN UNION 行 {eu15:,}", eu15, "EU15加盟国＋英国−二重計上 の和", s15)
+    d27 = dc_rows(rows, y, set(EU27_NAMES.values()))
+    total = sum(present.values()) - sum(v for _, v in d27)
+    info["double_countings"] = dict(d27)
+    info["check"] = chk + "。EU27 は照合の相手が無い自己合算"
+    return total, f"表の加盟{len(present)}か国合算−二重計上{sum(v for _, v in d27):,}（自己合算）", info
+
+
+def pick(rows, key, y):
+    """国名で行を引く。完全一致を優先し、無ければ前方一致が1件だけのとき採る（複数なら止める）。"""
+    if key in rows:
+        return key, rows[key]["vals"].get(y), rows[key]["flag"]
+    cand = [lab for lab in rows if lab.startswith(key) and not lab.startswith(("DOUBLE", "EUROPEAN"))]
+    if len(cand) > 1:
+        raise ValueError(f"{key} に複数の行が当たる: {cand}")
+    if not cand:
+        return None, None, ""
+    lab = cand[0]
+    return lab, rows[lab]["vals"].get(y), rows[lab]["flag"]
 
 
 def main():
@@ -159,29 +213,44 @@ def main():
     cache = Path(args.cache_dir); cache.mkdir(parents=True, exist_ok=True)
     out = Path(args.output_dir); out.mkdir(parents=True, exist_ok=True)
     pdf = download(url, cache / f"oica_{args.measure}_{'archive2000' if y in ARCHIVE else 'recent'}.pdf")
-    rows = parse_rows(pdf_layout_text(pdf))
-
-    eu27, eu27_how = compute_eu27(rows, col)
-    recs = []
-    for c in [c.strip().upper() for c in args.countries.split(",") if c.strip()]:
-        lab, v = pick(rows, c, col)
-        recs.append({"country": c, "matched": lab, "value": v,
-                     "share_eu27_pct": round(v / eu27 * 100, 2) if (v and eu27) else None})
-    recs.append({"country": "EU27", "matched": eu27_how, "value": eu27, "share_eu27_pct": 100.0})
+    try:
+        rows = parse_rows(pdf_layout_text(pdf), years)
+        eu27, eu27_how, eu27_info = compute_eu27(rows, y)
+        recs = []
+        for c in [c.strip().upper() for c in args.countries.split(",") if c.strip()]:
+            lab, v, flag = pick(rows, c, y)
+            if lab is None:
+                raise ValueError(f"{c} の行が無い")
+            recs.append({"country": c, "matched": lab, "value": v, "flag": flag,
+                         "share_eu27_pct": round(v / eu27 * 100, 2) if (v and eu27) else None})
+    except ValueError as e:
+        sys.exit(f"! {e}")
+    recs.append({"country": "EU27", "matched": eu27_how, "value": eu27,
+                 "flag": "; ".join(f"{k}: {v}" for k, v in eu27_info["member_flags"].items()),
+                 "share_eu27_pct": 100.0})
+    scope = (f"指定の{len(recs) - 1}か国（{args.countries}）と EU27 合計。"
+             f"EU27 は OICA の表に行がある加盟{len(eu27_info['members_in_table'])}か国の和"
+             f"（表に無い国 {','.join(eu27_info['eu27_countries_not_in_table'])}）。"
+             + ("注記つきの国（cars only 等）は車種の範囲が違う。" if eu27_info["member_flags"] else ""))
 
     stem = f"{datetime.date.today():%Y%m%d}_oica_{args.measure}_{y}"
     with open(out / f"{stem}.csv", "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f); w.writerow(["country", "matched_label", "value", "share_eu27_pct"])
+        w = csv.writer(f); w.writerow(["country", "matched_label", "value", "share_eu27_pct", "flag", "scope"])
         for r in recs:
-            w.writerow([r["country"], r["matched"], r["value"], r["share_eu27_pct"]])
+            w.writerow([r["country"], r["matched"], r["value"], r["share_eu27_pct"], r["flag"], scope])
     meta = {"source": "OICA (International Organization of Motor Vehicle Manufacturers)", "url": url,
-            "year": y, "measure": args.measure, "eu27_method": eu27_how,
-            "note": "現行oica.netは6年窓PDFのみ・2000はarchive.org公式(id_)。独(GERMANY)直近はcars only(OICA未報告CV除く)。Wikipedia不使用。",
+            "year": y, "measure": args.measure, "countries_requested": args.countries,
+            "scope": scope, "eu27_method": eu27_how, "eu27_detail": eu27_info,
+            "note": ("現行oica.netは6年窓PDFのみ・2000はarchive.org公式(id_)。直近の全車種PDFは "
+                     "独・フィンランドが cars only、仏が cars and LCV only、蘭・スウェーデンが yearly only（行ラベルの注記）。"
+                     "注記は flag 列と eu27_detail.member_flags。Wikipedia不使用。"),
             "retrieved_at": datetime.datetime.now().astimezone().isoformat()}
     (out / f"{stem}.metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
     for r in recs:
-        print(f"{r['country']:9} {str(r['value']):>10}  {r['share_eu27_pct']}%  ({r['matched']})")
+        print(f"{r['country']:9} {str(r['value']):>10}  {r['share_eu27_pct']}%  ({r['matched']}) {r['flag']}")
+    print("範囲:", scope)
+    print("照合:", eu27_info["check"])
     print("CSV:", out / f"{stem}.csv")
 
 

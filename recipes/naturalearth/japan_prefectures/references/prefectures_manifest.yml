@@ -1,0 +1,20 @@
+# 日本 都道府県境界（北方領土統合）マニフェスト — リファレンス値
+# fetch.py 既定実行で出る 47都道府県マニフェスト CSV（最東端経度 max_lon で降順）を採点。
+# 北方領土の幾何的包含は fetch.py 内の self-assert（北海道 max_lon>=147.5）が保証する。
+# ここでは構造（47面・主要県の存在・経度レンジ・降順・単位）を検証する。
+
+fetch_args: ""
+
+expected:
+  row_count: 47
+  # 最東端は南鳥島を持つ東京都（153.99°E）で決定的
+  top1_area: "東京都"
+  # 主要県が全て含まれる（n=47=全件中に存在）。北海道・沖縄・東京の欠落を検出
+  must_include_in_topN:
+    n: 47
+    areas: ["北海道", "沖縄県", "東京都", "大阪府"]
+  # 各県の最東端経度が日本の経度範囲内（CRS取り違え・座標破損を検出）
+  value_within_range:
+    Value: {min: 122.0, max: 154.5}
+  value_descending: true
+  unit: "°E"

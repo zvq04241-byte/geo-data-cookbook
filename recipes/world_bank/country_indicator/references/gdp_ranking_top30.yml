@@ -1,0 +1,45 @@
+# World Bank GDP (NY.GDP.MKTP.CD) Ranking Top30（集計地域を除く全ての国・地域の中で）— リファレンス値
+# 2024年で USA / CHN / DEU / JPN / IND の順は確立。
+# TWN は World Bank API で page=0/total=0 を返すためデフォルトから除外済 (fetch.py)。
+
+fetch_args: "--indicator NY.GDP.MKTP.CD --mode ranking --top-n 30 --all-countries"
+
+expected:
+  area_column: "country"
+  value_column: "value"
+  row_count: 30
+  top1_area: "United States"
+  must_include_in_top5:
+    - "United States"
+    - "China"
+    - "Germany"
+    - "Japan"
+    - "India"
+  must_include_in_topN:
+    n: 15
+    areas:
+      - "United Kingdom"
+      - "France"
+      - "Italy"
+      - "Canada"
+      - "Brazil"
+      - "Russian Federation"
+      - "Korea, Rep."
+  must_not_include_anywhere:
+    # 集計地域・所得グループ（World Bank API では aggregate も同じ endpoint で返る場合あり）
+    - "World"
+    - "High income"
+    - "Low income"
+    - "Middle income"
+    - "OECD members"
+    - "European Union"
+    - "Euro area"
+    - "Sub-Saharan Africa"
+    - "East Asia & Pacific"
+    - "North America"
+    - "Late-demographic dividend"
+  value_descending: true
+  # ★値域チェック（2026-07-21 追加）。名目GDP(現行USD)。実測は米30.8兆〜UAE 5,523億。
+  #   百万USD単位で出す等の取り違えを落とす。
+  value_within_range:
+    value: {min: 100000000000, max: 100000000000000}

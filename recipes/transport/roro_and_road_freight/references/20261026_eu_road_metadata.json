@@ -1,0 +1,18 @@
+{
+  "source": "Eurostat road_go_ia_lgtt",
+  "scope": "車両国籍=PT,ES,FR（3か国。全国籍ではない）・揚地国=UK・tra_type=TOTAL・nst07=TOTAL・2008〜2025年",
+  "geos": [
+    "PT",
+    "ES",
+    "FR"
+  ],
+  "unload": "UK",
+  "years": [
+    2008,
+    2025
+  ],
+  "note": "★DfTは『港』の統計でユーロトンネルを含まない。随伴と無随伴は別カテゴリで、足さないと道路貨物の全体にならない。Eurostat側の geo は車両の国籍であり積地国ではない",
+  "rows": 54,
+  "csv_sha256": "1cce8f4c6b2d83e73619f1636e3ce142c22e3d333ae060b8e06f84650b351626",
+  "retrieved_at": "2026-10-26T02:48:10.810677+09:00"
+}

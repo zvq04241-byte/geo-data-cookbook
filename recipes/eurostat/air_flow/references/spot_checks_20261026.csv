@@ -1,0 +1,6 @@
+item,value,unit,query,note
+DE-EG 空港ペア合計（報告国内 sum）,3691928,人,avia_par_de freq=A unit=PAS tra_meas=PAS_CRD time=2024,21空港ペアの合計。出力では 3691.9 千人。Eurostat の updated=2025-10-22
+DE-EG 最大の空港ペア,466806,人,同上,DE_EDDL_EG_HEGN（デュッセルドルフ–フルガダ）。フランクフルト–カイロ（DE_EDDF_EG_HECA）は 305793
+トルコ国内線（TR–TR 空港ペア合計）,93513819,人,avia_par_tr freq=A unit=PAS tra_meas=PAS_CRD time=2024,国内線は報告国==相手国で除外する
+DE-TR（TR の報告・最大ペア）,20072670,人,avia_par_tr 同条件,出力の最大値 20072.7 千人。旅客 max<100,000 千人の検査はこの約5倍の余裕
+2025年の年次値,0,件,avia_par_de 同条件 time=2025,2026-10-26 時点で空（前年に落ちる）

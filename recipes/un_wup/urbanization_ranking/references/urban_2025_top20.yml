@@ -1,0 +1,37 @@
+# UN WUP 2025 Degree of Urbanization (Cities and Towns, %) 2025 上位20 — リファレンス値
+# fetch.py の既定引数（--year 2025 --category urban --top-n 20）に対応。
+# 主目的: 集計地域（World/地域/所得グループ）が row[7]==4 フィルタで除外されることの保証。
+
+fetch_args: "--year 2025 --category urban --top-n 20"
+
+expected:
+  row_count: 20
+  top1_area: "Gibraltar"           # 100.0%（ファイル先頭の同値群の先頭・決定的）
+  must_include_in_top5:
+    - "Singapore"
+    - "Monaco"
+  must_not_include_anywhere:
+    # WUP 集計地域 — row[7]==4 で除外されるはず。混入したら誤り。
+    - "WORLD"
+    - "World"
+    - "More developed regions"
+    - "Less developed regions"
+    - "Least developed countries"
+    - "High-income countries"
+    - "Middle-income countries"
+    - "Low-income countries"
+    - "Africa"
+    - "Asia"
+    - "Europe"
+    - "Oceania"
+    - "Northern America"
+    - "Latin America and the Caribbean"
+    - "Sub-Saharan Africa"
+  value_descending: true
+  year_value: 2025
+  unit: "%"
+  # ★値域チェック（2026-07-21 追加）。順位系だけでは「順位は合っているが桁が違う」
+  #   （割合を0-1で出す／人数を混ぜる）を検出できない。実測は上位20が93.8〜100.0%。
+  #   割合なので物理的上限100を超えたら誤り。下限は将来の順位変動に耐える50に。
+  value_within_range:
+    Value: {min: 50, max: 100}

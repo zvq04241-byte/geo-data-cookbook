@@ -1,0 +1,249 @@
+M49 Code,Country or Area,ne_admin,ne_type,ne_sovereignt,sovereign
+12,Algeria,Algeria,Sovereign country,Algeria,True
+818,Egypt,Egypt,Sovereign country,Egypt,True
+434,Libya,Libya,Sovereign country,Libya,True
+504,Morocco,Morocco,Sovereign country,Morocco,True
+729,Sudan,Sudan,Sovereign country,Sudan,True
+788,Tunisia,Tunisia,Sovereign country,Tunisia,True
+732,Western Sahara,Western Sahara,Indeterminate,Western Sahara,False
+86,British Indian Ocean Territory,British Indian Ocean Territory,Disputed,United Kingdom,False
+108,Burundi,Burundi,Sovereign country,Burundi,True
+174,Comoros,Comoros,Sovereign country,Comoros,True
+262,Djibouti,Djibouti,Sovereign country,Djibouti,True
+232,Eritrea,Eritrea,Sovereign country,Eritrea,True
+231,Ethiopia,Ethiopia,Sovereign country,Ethiopia,True
+260,French Southern Territories,French Southern and Antarctic Lands,Dependency,France,False
+404,Kenya,Kenya,Sovereign country,Kenya,True
+450,Madagascar,Madagascar,Sovereign country,Madagascar,True
+454,Malawi,Malawi,Sovereign country,Malawi,True
+480,Mauritius,Mauritius,Sovereign country,Mauritius,True
+175,Mayotte,,,,False
+508,Mozambique,Mozambique,Sovereign country,Mozambique,True
+638,Réunion,,,,False
+646,Rwanda,Rwanda,Sovereign country,Rwanda,True
+690,Seychelles,Seychelles,Sovereign country,Seychelles,True
+706,Somalia,Somalia,Sovereign country,Somalia,True
+728,South Sudan,South Sudan,Sovereign country,South Sudan,True
+800,Uganda,Uganda,Sovereign country,Uganda,True
+834,United Republic of Tanzania,United Republic of Tanzania,Sovereign country,United Republic of Tanzania,True
+894,Zambia,Zambia,Sovereign country,Zambia,True
+716,Zimbabwe,Zimbabwe,Sovereign country,Zimbabwe,True
+24,Angola,Angola,Sovereign country,Angola,True
+120,Cameroon,Cameroon,Sovereign country,Cameroon,True
+140,Central African Republic,Central African Republic,Sovereign country,Central African Republic,True
+148,Chad,Chad,Sovereign country,Chad,True
+178,Congo,Republic of the Congo,Sovereign country,Republic of the Congo,True
+180,Democratic Republic of the Congo,Democratic Republic of the Congo,Sovereign country,Democratic Republic of the Congo,True
+226,Equatorial Guinea,Equatorial Guinea,Sovereign country,Equatorial Guinea,True
+266,Gabon,Gabon,Sovereign country,Gabon,True
+678,Sao Tome and Principe,São Tomé and Principe,Sovereign country,São Tomé and Principe,True
+72,Botswana,Botswana,Sovereign country,Botswana,True
+748,Eswatini,eSwatini,Sovereign country,eSwatini,True
+426,Lesotho,Lesotho,Sovereign country,Lesotho,True
+516,Namibia,Namibia,Sovereign country,Namibia,True
+710,South Africa,South Africa,Sovereign country,South Africa,True
+204,Benin,Benin,Sovereign country,Benin,True
+854,Burkina Faso,Burkina Faso,Sovereign country,Burkina Faso,True
+132,Cabo Verde,Cabo Verde,Sovereign country,Cabo Verde,True
+384,Côte d’Ivoire,Ivory Coast,Sovereign country,Ivory Coast,True
+270,Gambia,Gambia,Sovereign country,Gambia,True
+288,Ghana,Ghana,Sovereign country,Ghana,True
+324,Guinea,Guinea,Sovereign country,Guinea,True
+624,Guinea-Bissau,Guinea-Bissau,Sovereign country,Guinea-Bissau,True
+430,Liberia,Liberia,Sovereign country,Liberia,True
+466,Mali,Mali,Sovereign country,Mali,True
+478,Mauritania,Mauritania,Sovereign country,Mauritania,True
+562,Niger,Niger,Sovereign country,Niger,True
+566,Nigeria,Nigeria,Sovereign country,Nigeria,True
+654,Saint Helena,Saint Helena,Dependency,United Kingdom,False
+686,Senegal,Senegal,Sovereign country,Senegal,True
+694,Sierra Leone,Sierra Leone,Sovereign country,Sierra Leone,True
+768,Togo,Togo,Sovereign country,Togo,True
+660,Anguilla,Anguilla,Dependency,United Kingdom,False
+28,Antigua and Barbuda,Antigua and Barbuda,Sovereign country,Antigua and Barbuda,True
+533,Aruba,Aruba,Country,Netherlands,False
+44,Bahamas,The Bahamas,Sovereign country,The Bahamas,True
+52,Barbados,Barbados,Sovereign country,Barbados,True
+535,"Bonaire, Sint Eustatius and Saba",,,,False
+92,British Virgin Islands,British Virgin Islands,Dependency,United Kingdom,False
+136,Cayman Islands,Cayman Islands,Dependency,United Kingdom,False
+192,Cuba,Cuba,Sovereignty,Cuba,True
+531,Curaçao,Curaçao,Country,Netherlands,False
+212,Dominica,Dominica,Sovereign country,Dominica,True
+214,Dominican Republic,Dominican Republic,Sovereign country,Dominican Republic,True
+308,Grenada,Grenada,Sovereign country,Grenada,True
+312,Guadeloupe,,,,False
+332,Haiti,Haiti,Sovereign country,Haiti,True
+388,Jamaica,Jamaica,Sovereign country,Jamaica,True
+474,Martinique,,,,False
+500,Montserrat,Montserrat,Dependency,United Kingdom,False
+630,Puerto Rico,Puerto Rico,Dependency,United States of America,False
+652,Saint Barthélemy,Saint Barthelemy,Dependency,France,False
+659,Saint Kitts and Nevis,Saint Kitts and Nevis,Sovereign country,Saint Kitts and Nevis,True
+662,Saint Lucia,Saint Lucia,Sovereign country,Saint Lucia,True
+663,Saint Martin (French Part),Saint Martin,Dependency,France,False
+670,Saint Vincent and the Grenadines,Saint Vincent and the Grenadines,Sovereign country,Saint Vincent and the Grenadines,True
+534,Sint Maarten (Dutch part),Sint Maarten,Country,Netherlands,False
+780,Trinidad and Tobago,Trinidad and Tobago,Sovereign country,Trinidad and Tobago,True
+796,Turks and Caicos Islands,Turks and Caicos Islands,Dependency,United Kingdom,False
+850,United States Virgin Islands,United States Virgin Islands,Dependency,United States of America,False
+84,Belize,Belize,Sovereign country,Belize,True
+188,Costa Rica,Costa Rica,Sovereign country,Costa Rica,True
+222,El Salvador,El Salvador,Sovereign country,El Salvador,True
+320,Guatemala,Guatemala,Sovereign country,Guatemala,True
+340,Honduras,Honduras,Sovereign country,Honduras,True
+484,Mexico,Mexico,Sovereign country,Mexico,True
+558,Nicaragua,Nicaragua,Sovereign country,Nicaragua,True
+591,Panama,Panama,Sovereign country,Panama,True
+32,Argentina,Argentina,Sovereign country,Argentina,True
+68,Bolivia (Plurinational State of),Bolivia,Sovereign country,Bolivia,True
+74,Bouvet Island,,,,False
+76,Brazil,Brazil,Sovereign country,Brazil,True
+152,Chile,Chile,Sovereign country,Chile,True
+170,Colombia,Colombia,Sovereign country,Colombia,True
+218,Ecuador,Ecuador,Sovereign country,Ecuador,True
+238,Falkland Islands (Malvinas),Falkland Islands,Disputed,United Kingdom,False
+254,French Guiana,,,,False
+328,Guyana,Guyana,Sovereign country,Guyana,True
+600,Paraguay,Paraguay,Sovereign country,Paraguay,True
+604,Peru,Peru,Sovereign country,Peru,True
+239,South Georgia and the South Sandwich Islands,South Georgia and the Islands,Dependency,United Kingdom,False
+740,Suriname,Suriname,Sovereign country,Suriname,True
+858,Uruguay,Uruguay,Sovereign country,Uruguay,True
+862,Venezuela (Bolivarian Republic of),Venezuela,Sovereign country,Venezuela,True
+60,Bermuda,Bermuda,Dependency,United Kingdom,False
+124,Canada,Canada,Sovereign country,Canada,True
+304,Greenland,Greenland,Country,Denmark,False
+666,Saint Pierre and Miquelon,Saint Pierre and Miquelon,Dependency,France,False
+840,United States of America,United States of America,Country,United States of America,True
+10,Antarctica,Antarctica,Indeterminate,Antarctica,False
+398,Kazakhstan,Kazakhstan,Sovereignty,Kazakhstan,True
+417,Kyrgyzstan,Kyrgyzstan,Sovereign country,Kyrgyzstan,True
+762,Tajikistan,Tajikistan,Sovereign country,Tajikistan,True
+795,Turkmenistan,Turkmenistan,Sovereign country,Turkmenistan,True
+860,Uzbekistan,Uzbekistan,Sovereign country,Uzbekistan,True
+156,China,China,Country,China,True
+344,"China, Hong Kong Special Administrative Region",Hong Kong S.A.R.,Country,China,False
+446,"China, Macao Special Administrative Region",Macao S.A.R,Country,China,False
+408,Democratic People's Republic of Korea,North Korea,Sovereign country,North Korea,True
+392,Japan,Japan,Sovereign country,Japan,True
+496,Mongolia,Mongolia,Sovereign country,Mongolia,True
+410,Republic of Korea,South Korea,Sovereign country,South Korea,True
+96,Brunei Darussalam,Brunei,Sovereign country,Brunei,True
+116,Cambodia,Cambodia,Sovereign country,Cambodia,True
+360,Indonesia,Indonesia,Sovereign country,Indonesia,True
+418,Lao People's Democratic Republic,Laos,Sovereign country,Laos,True
+458,Malaysia,Malaysia,Sovereign country,Malaysia,True
+104,Myanmar,Myanmar,Sovereign country,Myanmar,True
+608,Philippines,Philippines,Sovereign country,Philippines,True
+702,Singapore,Singapore,Sovereign country,Singapore,True
+764,Thailand,Thailand,Sovereign country,Thailand,True
+626,Timor-Leste,East Timor,Sovereign country,East Timor,True
+704,Viet Nam,Vietnam,Sovereign country,Vietnam,True
+4,Afghanistan,Afghanistan,Sovereign country,Afghanistan,True
+50,Bangladesh,Bangladesh,Sovereign country,Bangladesh,True
+64,Bhutan,Bhutan,Sovereign country,Bhutan,True
+356,India,India,Sovereign country,India,True
+364,Iran (Islamic Republic of),Iran,Sovereign country,Iran,True
+462,Maldives,Maldives,Sovereign country,Maldives,True
+524,Nepal,Nepal,Sovereign country,Nepal,True
+586,Pakistan,Pakistan,Sovereign country,Pakistan,True
+144,Sri Lanka,Sri Lanka,Sovereign country,Sri Lanka,True
+51,Armenia,Armenia,Sovereign country,Armenia,True
+31,Azerbaijan,Azerbaijan,Sovereign country,Azerbaijan,True
+48,Bahrain,Bahrain,Sovereign country,Bahrain,True
+196,Cyprus,Cyprus,Sovereign country,Cyprus,True
+268,Georgia,Georgia,Sovereign country,Georgia,True
+368,Iraq,Iraq,Sovereign country,Iraq,True
+376,Israel,Israel,Disputed,Israel,False
+400,Jordan,Jordan,Sovereign country,Jordan,True
+414,Kuwait,Kuwait,Sovereign country,Kuwait,True
+422,Lebanon,Lebanon,Sovereign country,Lebanon,True
+512,Oman,Oman,Sovereign country,Oman,True
+634,Qatar,Qatar,Sovereign country,Qatar,True
+682,Saudi Arabia,Saudi Arabia,Sovereign country,Saudi Arabia,True
+275,State of Palestine,Palestine,Indeterminate,Israel,False
+760,Syrian Arab Republic,Syria,Sovereign country,Syria,True
+792,Türkiye,Turkey,Sovereign country,Turkey,True
+784,United Arab Emirates,United Arab Emirates,Sovereign country,United Arab Emirates,True
+887,Yemen,Yemen,Sovereign country,Yemen,True
+112,Belarus,Belarus,Sovereign country,Belarus,True
+100,Bulgaria,Bulgaria,Sovereign country,Bulgaria,True
+203,Czechia,Czechia,Sovereign country,Czechia,True
+348,Hungary,Hungary,Sovereign country,Hungary,True
+616,Poland,Poland,Sovereign country,Poland,True
+498,Republic of Moldova,Moldova,Sovereign country,Moldova,True
+642,Romania,Romania,Sovereign country,Romania,True
+643,Russian Federation,Russia,Sovereign country,Russia,True
+703,Slovakia,Slovakia,Sovereign country,Slovakia,True
+804,Ukraine,Ukraine,Sovereign country,Ukraine,True
+248,Åland Islands,Aland,Country,Finland,False
+208,Denmark,Denmark,Country,Denmark,True
+233,Estonia,Estonia,Sovereign country,Estonia,True
+234,Faroe Islands,Faroe Islands,Dependency,Denmark,False
+246,Finland,Finland,Country,Finland,True
+831,Guernsey,Guernsey,Country,United Kingdom,False
+352,Iceland,Iceland,Sovereign country,Iceland,True
+372,Ireland,Ireland,Sovereign country,Ireland,True
+833,Isle of Man,Isle of Man,Country,United Kingdom,False
+832,Jersey,Jersey,Country,United Kingdom,False
+428,Latvia,Latvia,Sovereign country,Latvia,True
+440,Lithuania,Lithuania,Sovereign country,Lithuania,True
+578,Norway,Norway,Sovereign country,Norway,True
+744,Svalbard and Jan Mayen Islands,,,,False
+752,Sweden,Sweden,Sovereign country,Sweden,True
+826,United Kingdom of Great Britain and Northern Ireland,United Kingdom,Country,United Kingdom,True
+8,Albania,Albania,Sovereign country,Albania,True
+20,Andorra,Andorra,Sovereign country,Andorra,True
+70,Bosnia and Herzegovina,Bosnia and Herzegovina,Sovereign country,Bosnia and Herzegovina,True
+191,Croatia,Croatia,Sovereign country,Croatia,True
+292,Gibraltar,Gibraltar,Disputed,United Kingdom,False
+300,Greece,Greece,Sovereign country,Greece,True
+336,Holy See,Vatican,Sovereign country,Vatican,True
+380,Italy,Italy,Sovereign country,Italy,True
+470,Malta,Malta,Sovereign country,Malta,True
+499,Montenegro,Montenegro,Sovereign country,Montenegro,True
+807,North Macedonia,North Macedonia,Sovereign country,North Macedonia,True
+620,Portugal,Portugal,Sovereign country,Portugal,True
+674,San Marino,San Marino,Sovereign country,San Marino,True
+688,Serbia,Republic of Serbia,Sovereign country,Republic of Serbia,True
+705,Slovenia,Slovenia,Sovereign country,Slovenia,True
+724,Spain,Spain,Sovereign country,Spain,True
+40,Austria,Austria,Sovereign country,Austria,True
+56,Belgium,Belgium,Sovereign country,Belgium,True
+250,France,France,Country,France,True
+276,Germany,Germany,Sovereign country,Germany,True
+438,Liechtenstein,Liechtenstein,Sovereign country,Liechtenstein,True
+442,Luxembourg,Luxembourg,Sovereign country,Luxembourg,True
+492,Monaco,Monaco,Sovereign country,Monaco,True
+528,Netherlands (Kingdom of the),Netherlands,Country,Netherlands,True
+756,Switzerland,Switzerland,Sovereign country,Switzerland,True
+36,Australia,Australia,Country,Australia,True
+162,Christmas Island,,,,False
+166,Cocos (Keeling) Islands,,,,False
+334,Heard Island and McDonald Islands,Heard Island and McDonald Islands,Dependency,Australia,False
+554,New Zealand,New Zealand,Country,New Zealand,True
+574,Norfolk Island,Norfolk Island,Dependency,Australia,False
+242,Fiji,Fiji,Sovereign country,Fiji,True
+540,New Caledonia,New Caledonia,Dependency,France,False
+598,Papua New Guinea,Papua New Guinea,Sovereign country,Papua New Guinea,True
+90,Solomon Islands,Solomon Islands,Sovereign country,Solomon Islands,True
+548,Vanuatu,Vanuatu,Sovereign country,Vanuatu,True
+316,Guam,Guam,Dependency,United States of America,False
+296,Kiribati,Kiribati,Sovereign country,Kiribati,True
+584,Marshall Islands,Marshall Islands,Sovereign country,Marshall Islands,True
+583,Micronesia (Federated States of),Federated States of Micronesia,Sovereign country,Federated States of Micronesia,True
+520,Naoero,Nauru,Sovereign country,Nauru,True
+580,Northern Mariana Islands,Northern Mariana Islands,Dependency,United States of America,False
+585,Palau,Palau,Sovereign country,Palau,True
+581,United States Minor Outlying Islands,United States Minor Outlying Islands,Dependency,United States of America,False
+16,American Samoa,American Samoa,Dependency,United States of America,False
+184,Cook Islands,Cook Islands,Dependency,New Zealand,False
+258,French Polynesia,French Polynesia,Dependency,France,False
+570,Niue,Niue,Dependency,New Zealand,False
+612,Pitcairn,Pitcairn Islands,Dependency,United Kingdom,False
+882,Samoa,Samoa,Sovereign country,Samoa,True
+772,Tokelau,,,,False
+776,Tonga,Tonga,Sovereign country,Tonga,True
+798,Tuvalu,Tuvalu,Sovereign country,Tuvalu,True
+876,Wallis and Futuna Islands,Wallis and Futuna,Dependency,France,False

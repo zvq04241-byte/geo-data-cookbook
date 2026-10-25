@@ -1,0 +1,13 @@
+# Eurostat 欧州・西アジア・アフリカ間 航空貨物フロー 2024 — リファレンス値（トン/年, 双方向）
+fetch_args: "--measure cargo --year 2024"
+expected:
+  row_count_min: 80
+  area_column: "route"
+  value_column: "cargo_ton"
+  top1_area: "DE-AE"          # 2024年の最大（2026-10-26 再取得でも同じ）
+  must_include_in_top5:
+    - "DE-AE"
+    - "DE-TR"
+  value_descending: true
+  value_within_range:
+    cargo_ton: {min: 0, max: 2000000}

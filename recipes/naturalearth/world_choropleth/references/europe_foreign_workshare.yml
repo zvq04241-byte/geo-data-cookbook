@@ -1,0 +1,30 @@
+# 国レベル階級区分図 — リファレンス（描画レシピ検証用）
+# Eurostat 外国生まれ就業者割合(2025)のCSVを 3分位で描いたときの確定値。
+# render.py は CSV+境界を結合し PNG/PDF/metadata を出す。ここでは metadata の構造を採点する。
+# データ源CSVは europe_foreign_workshare_p000/data/processed/20260623_foreignBORN_employment_share.csv
+
+fetch_args: >-
+  --csv {CSV} --code-col geo --value-col foreignborn_share_pct --code-kind iso_a2
+  --classify-n 3 --bbox -30 50 34 75 --projection albers
+  --output-dir {OUT} --basename ref_europe_workshare
+
+expected:
+  # 34カ国すべてが Natural Earth に結合（仏・諾の ISO_A2=-99 を ISO_A2_EH で補完できているか）
+  merged_count: 34
+  unmatched_codes: []          # 未結合ゼロ＝結合ロジック健全
+  classify_n: 3
+  # 3分位境界（昇順）。データ更新で変わるが、構造（単調増加・3区間）を検証
+  class_breaks_monotonic: true
+  class_breaks_approx: [0.3, 8.6, 21.3, 60.4]
+  # 各階級に最低1カ国（分位なので概ね均等）
+  class_counts_all_nonzero: true
+  projection_is_equal_area: true   # albers/laea/cea はいずれも正積
+  # 図法の既定は正方形図法（platecarree）。明示時のみ正積へ
+  default_projection: "platecarree"
+
+notes: |
+  図法の使い分け（このレシピの肝）:
+    platecarree … 正方形図法。矩形クロップ◎・正積でない。既定。
+    albers      … 正積円錐。中緯度・矩形クロップ良。欧州主題図の推奨。
+    laea        … 正積方位(EPSG:3035相当)。形は最良だが扇形で切りにくい。
+    cea         … 正積円筒。高緯度が潰れる・非推奨。

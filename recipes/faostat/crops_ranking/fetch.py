@@ -42,33 +42,28 @@ FAO_BULK_URL = (
 )
 CSV_NAME = "Production_Crops_Livestock_E_All_Data_(Normalized).csv"
 
-# 国別ランキングから除外する集計地域
-# FAOSTAT 表記揺れ（LLDC/LLDCs等）への対応のため、両形を含める。
-AGG_AREAS = {
-    # 世界・大陸
-    "World", "Africa", "Asia", "Europe", "Americas", "Oceania",
-    # 中陸・小地域
-    "Northern Africa", "Eastern Africa", "Western Africa", "Southern Africa", "Middle Africa", "Sub-Saharan Africa",
-    "Northern America", "South America", "Central America", "Caribbean",
-    "Eastern Asia", "Southern Asia", "South-eastern Asia", "Western Asia", "Central Asia",
-    "Northern Europe", "Southern Europe", "Western Europe", "Eastern Europe",
-    "Australia and New Zealand", "Melanesia", "Micronesia", "Polynesia",
-    # 政治・経済グループ
-    "European Union (27)", "European Union (28)",
-    "Least Developed Countries",
-    "Least Developed Countries (LDCs)",   # 2026-08-20 追記: FAO側で(LDCs)付きに改称され完全一致から漏れていた
-    "Low Income Food Deficit Countries (LIFDCs)",
-    "Net Food Importing Developing Countries (NFIDCs)",
-    "Land Locked Developing Countries (LLDC)",
-    "Land Locked Developing Countries (LLDCs)",
-    "Small Island Developing States (SIDS)",
-    # 中国の集計（mainland + Taiwan + HK + Macao の合計）
-    # 通常の教材用途では "China, mainland" を採用するため、集計値は除外する
-    "China",
-    # 歴史的アグリゲート（古い年データで出る可能性）
-    "Belgium-Luxembourg", "USSR", "Yugoslav SFR", "Czechoslovakia",
-    "Serbia and Montenegro", "Sudan (former)", "Ethiopia PDR",
-}
+# 国別ランキングから除外する集計地域は **Area Code** で決める（名前では決めない）。
+#   - Area Code >= 5000 は FAOSTAT の地域集計（World・大陸・小地域・EU・LDCs 等）
+#   - 5000 未満でも集計値のもの: China 351（= China, mainland 41 ＋台湾＋ホンコン＋マカオ）、
+#     貿易 TCL の China/EU "excluding intra-trade"（265/261/266/268/269）
+#   以前は集計地域の**名前**の完全一致リストで落としていたが、FAO が改称すると静かに漏れる
+#   （2026-08-20、"Least Developed Countries (LDCs)" が Rice/2024 の第3位に混入）。
+#   ワークスペースでは lib.bulk_data.FAOSTAT_AGGREGATE_AREAS が正本。単体で動かすときは下の写しを使う。
+AGG_CODE_MIN = 5000
+_AGG_CODES_FALLBACK = {351, 265, 261, 266, 268, 269}
+try:  # ワークスペース内ならライブラリの既定に合わせる
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
+    from lib.bulk_data import FAOSTAT_AGGREGATE_AREAS as _LIB_AGG
+    AGG_CODES = set(_LIB_AGG)
+except Exception:
+    AGG_CODES = set(_AGG_CODES_FALLBACK)
+
+
+def is_aggregate_code(code) -> bool:
+    """Area Code が地域集計（5000以上）か、国のふりをした集計値（China 351 等）なら True。"""
+    c = int(code)
+    return c >= AGG_CODE_MIN or c in AGG_CODES
+
 
 # 品目名の別名展開（FAOSTAT の表記揺れ対応）
 ITEM_ALIASES = {
@@ -162,7 +157,7 @@ def query_ranking(
     - Item は ITEM_ALIASES で表記揺れ展開後、同一国内で合算。
     """
     aliases = ITEM_ALIASES.get(item, [item])
-    use_cols = ["Area", "Item", "Element", "Year", "Unit", "Value"]
+    use_cols = ["Area Code", "Area", "Item", "Element", "Year", "Unit", "Value", "Flag"]
 
     chunks = []
     for chunk in pd.read_csv(
@@ -173,8 +168,8 @@ def query_ranking(
             (chunk["Element"] == element)
             & (chunk["Year"] == year)
             & (chunk["Item"].isin(aliases))
-            & (~chunk["Area"].isin(AGG_AREAS))
         ]
+        sel = sel[~sel["Area Code"].map(is_aggregate_code)]
         if not sel.empty:
             chunks.append(sel)
 
@@ -182,19 +177,32 @@ def query_ranking(
         return pd.DataFrame()
 
     df = pd.concat(chunks, ignore_index=True)
-    # 同一国内で複数 Item エイリアスがヒットした場合は合算
-    df = df.groupby(["Area"], as_index=False).agg({
-        "Value": "sum", "Item": "first", "Year": "first",
+    units = sorted(df["Unit"].dropna().unique())
+    if len(units) > 1:  # 別名の品目どうしで単位が違えば足せない
+        raise DataFetchError(source="FAOSTAT", url="(csv)", kind="UNIT_MISMATCH",
+                             message=f"単位が混在: {units}")
+    # 同一国内で複数 Item エイリアスがヒットした場合は合算。Flag は合算した行のものを並べて残す
+    df["Flag"] = df["Flag"].fillna("A")   # FAOSTAT は公式値（A）の Flag を空欄で出すことがある
+    df = df.groupby(["Area Code", "Area"], as_index=False).agg({
+        "Value": lambda v: v.sum(min_count=1),   # 全部欠損（Flag M）の国を0にしない
+        "Item": "first", "Year": "first",
         "Element": "first", "Unit": "first",
+        "Flag": lambda f: "".join(sorted(set(f))),
     })
+    n_ranked = int(df["Value"].notna().sum())
     df = df.sort_values("Value", ascending=False).head(top_n).reset_index(drop=True)
     df.insert(0, "Rank", df.index + 1)
-    return df[["Rank", "Area", "Item", "Element", "Year", "Value", "Unit"]]
+    # E=推計・I=補完・X=他機関の値。図表では E/I に＊を付ける（recipe.md ハマり所7）
+    df["estimated"] = df["Flag"].str.contains("E|I", regex=True)
+    df.attrs["n_ranked"] = n_ranked
+    return df[["Rank", "Area Code", "Area", "Item", "Element", "Year", "Value", "Unit",
+               "Flag", "estimated"]]
 
 
 def save_metadata(
     meta_path: Path, *, item: str, year: int, element: str, top_n: int,
-    raw_csv: Path, out_csv: Path, row_count: int,
+    raw_csv: Path, out_csv: Path, row_count: int, n_ranked: int, units: str,
+    flag_counts: dict,
 ) -> dict:
     meta = {
         "task_name": f"faostat_crops_ranking_{item.lower()}_{year}_top{top_n}",
@@ -211,8 +219,13 @@ def save_metadata(
             "year": year,
             "top_n": top_n,
             "exclude_aggregate_areas": True,
+            "aggregate_rule": f"Area Code >= {AGG_CODE_MIN} と {sorted(AGG_CODES)} を除外",
         },
-        "units": "tonnes",
+        "scope": (f"集計地域（Area Code {AGG_CODE_MIN} 以上と China 351 等）を除く"
+                  f"全{n_ranked}か国・地域の中での順位（{year}年に値のある国・地域）"),
+        "n_areas_ranked": n_ranked,
+        "flag_counts_in_output": flag_counts,
+        "units": units,
         "fetched_at": datetime.now(timezone.utc).astimezone().isoformat(),
         "csv_sha256": sha256_of(out_csv),
         "csv_size_bytes": out_csv.stat().st_size,
@@ -220,8 +233,9 @@ def save_metadata(
         "raw_csv_sha256": sha256_of(raw_csv),
         "missing_value_treatment": "公表値なしは空欄維持（推測補完なし）",
         "notes": (
-            "国別ランキング。集計地域（World, EU27 等）は除外。"
-            "Item は別名展開後に同一国で合算。"
+            "国別ランキング。集計地域は Area Code で除外（名前では判定しない）。"
+            "Item は別名展開後に同一国で合算。Flag 列: 空欄=A 公式値, E 推計, I 補完, X 他機関。"
+            "estimated=True の値は図表で＊を付ける。"
         ),
     }
     meta_path.parent.mkdir(parents=True, exist_ok=True)
@@ -314,16 +328,22 @@ def main() -> int:
         out_meta,
         item=args.item, year=args.year, element=args.element, top_n=args.top_n,
         raw_csv=csv_path, out_csv=out_csv, row_count=len(df),
+        n_ranked=df.attrs.get("n_ranked", len(df)), units=str(df["Unit"].iloc[0]),
+        flag_counts={k: int(v) for k, v in df["Flag"].value_counts().items()},
     )
     logging.info("出力: %s (%d rows, sha256=%s…)",
                  out_csv, len(df), meta["csv_sha256"][:12])
     logging.info("metadata: %s", out_meta)
 
     # ─── 結果サマリ ───
-    print(f"\n== FAOSTAT {args.item} {args.element} Top {args.top_n} ({args.year}) ==")
+    print(f"\n== FAOSTAT {args.item} {args.element} Top {args.top_n} ({args.year}) "
+          f"— {meta['scope']} ==")
     for _, row in df.iterrows():
+        mark = "＊" if row["estimated"] else "  "
         print(f"  {row['Rank']:>2}  {row['Area']:<35}  "
-              f"{row['Value']:>15,.0f}  {row['Unit']}")
+              f"{row['Value']:>15,.0f}{mark} {row['Unit']}  [{row['Flag']}]")
+    if df["estimated"].any():
+        print("  ＊= FAO の推計（E）・補完（I）の値")
     return 0
 
 

@@ -23,7 +23,11 @@ WSIF = "https://worldsteel.org/wp-content/uploads/World-Steel-in-Figures-2025-3.
 SSY2002 = "https://worldsteel.org/wp-content/uploads/Steel-Statistical-Yearbook-2002.pdf"  # 1992-2001
 SSY_YEARS = list(range(1992, 2002))     # Table4 の列順（10列）
 
-# 2000年EU27を作るための「EU15以外の現加盟国」（SSY2002表記）
+# 2000年EU27を作るための「EU15以外の現加盟国」（SSY2002表記）。
+# EU27 = EU15 − UK（14か国）＋ 13か国。13か国のうちキプロス・マルタは SSY2002 Table 4 に行が無い（粗鋼生産なし）ので
+# ここには入れない。エストニア・リトアニアは Table 4 で年の欄が欠けて行として読めないので、
+# "BALTIC STATES" − LATVIA を残りとして足す（2000年は 501−500＝1千t）。
+NOT_PRODUCERS = ["CYPRUS", "MALTA"]
 NEW_MEMBERS = ["CZECH REPUBLIC", "POLAND", "HUNGARY", "SLOVAK REPUBLIC", "SLOVENIA",
                "ROMANIA", "BULGARIA", "ESTONIA", "LATVIA", "LITHUANIA", "CROATIA"]
 COUNTRY_ALIASES = {"GERMANY": ["GERMANY", "F.R. GERMANY"], "CZECH": ["CZECH REPUBLIC", "CZECHIA"]}
@@ -90,18 +94,29 @@ def parse_ssy_table4(text):
     return out
 
 
-def get(rows, key):
-    for alias in COUNTRY_ALIASES.get(key, [key]):
-        for lab, v in rows.items():
-            if lab == alias or lab.startswith(alias):
-                return lab, v
+def get(rows, key, exact=False):
+    """完全一致を先に探す。前方一致は exact=False のときだけ、しかも当たりが1つのときだけ使う
+    （"EUROPEAN UNION" が (15)/(27) の両方に当たって取り違えるのを防ぐ）。"""
+    aliases = COUNTRY_ALIASES.get(key, [key])
+    for alias in aliases:
+        if alias in rows:
+            return alias, rows[alias]
+    if exact:
+        return None, None
+    for alias in aliases:
+        hits = [lab for lab in rows if lab.startswith(alias)]
+        if len(hits) == 1:
+            return hits[0], rows[hits[0]]
+        if len(hits) > 1:
+            sys.exit(f"! '{alias}' が複数の行に前方一致: {hits}。ラベルを完全な形で指定する")
     return None, None
 
 
 def main():
     ap = argparse.ArgumentParser(description="worldsteel公式PDFから国別粗鋼生産量(百万t)を取得（一次・Wikipedia不使用）")
     ap.add_argument("--year", type=int, required=True, help="2024（WSIF）または 1992-2001（SSY2002, 例 2000）")
-    ap.add_argument("--countries", default="GERMANY,FRANCE,SPAIN,CZECH")
+    ap.add_argument("--countries", default="GERMANY,FRANCE,SPAIN,CZECH",
+                    help="既定は4か国の抜粋（世界・EU全体の一覧ではない）。CSV には指定国と EU27 の行だけが出る")
     ap.add_argument("--output-dir", default="./output")
     ap.add_argument("--cache-dir", default="./cache")
     args = ap.parse_args()
@@ -115,21 +130,43 @@ def main():
         rows = parse_wsif(layout(download(url, cache / "worldsteel_wsif.pdf")))
         for c in wanted:
             _, v = get(rows, c); recs[c] = v
-        _, eu = get(rows, "EUROPEAN UNION"); eu27, how = eu, "公式 European Union (27) 行"
+        _, eu = get(rows, "EUROPEAN UNION (27)", exact=True); eu27, how = eu, "公式 European Union (27) 行"
+        # 検算: 表で EU27 行より前に並ぶ加盟国の行の合計と照らす（2024年は20か国で 129.6）
+        keys = list(rows)
+        if eu is not None:
+            members = keys[:keys.index("EUROPEAN UNION (27)")]
+            msum = round(sum(rows[k] for k in members), 1)
+            check = {"members_listed": len(members), "members_sum": msum, "eu27_row": eu}
+            if abs(msum - eu) > 0.5:
+                print(f"★ EU27 行 {eu} と加盟国行の合計 {msum} が 0.5 以上ずれる", file=sys.stderr)
     elif args.year in SSY_YEARS:
         url = SSY2002; col = SSY_YEARS.index(args.year)
         rows = parse_ssy_table4(layout(download(url, cache / "worldsteel_ssy2002.pdf")))
         for c in wanted:
             _, v = get(rows, c); recs[c] = round(v[col] / 1000, 3) if v else None
-        _, eu15 = get(rows, "EUROPEAN UNION")   # EU15行にはUK含む→EU27ではUKを控除
-        _, uk = get(rows, "UNITED KINGDOM")
-        add = sum(rows[m][col] for m in NEW_MEMBERS if m in rows)
-        eu27 = round((eu15[col] - uk[col] + add) / 1000, 1) if (eu15 and uk) else None
-        how = (f"EU15({eu15[col]/1000:.1f})−UK({uk[col]/1000:.1f})＋新規加盟"
-               f"{sum(1 for m in NEW_MEMBERS if m in rows)}か国合算") if (eu15 and uk) else "算出不可"
+        _, eu15 = get(rows, "EUROPEAN UNION (15)", exact=True)   # EU15行にはUK含む→EU27ではUKを控除
+        _, uk = get(rows, "UNITED KINGDOM", exact=True)
+        found = [m for m in NEW_MEMBERS if m in rows]
+        missing = [m for m in NEW_MEMBERS if m not in rows]
+        add = sum(rows[m][col] for m in found)
+        baltic_rest = 0
+        if set(missing) <= {"ESTONIA", "LITHUANIA"} and missing and "BALTIC STATES" in rows and "LATVIA" in rows:
+            baltic_rest = rows["BALTIC STATES"][col] - rows["LATVIA"][col]
+            add += baltic_rest
+            missing = []
+        if not (eu15 and uk) or missing:
+            sys.exit(f"! EU27({args.year}) を組めない: EU15行 {bool(eu15)} / UK行 {bool(uk)} / 見つからない加盟国 {missing}")
+        eu27 = round((eu15[col] - uk[col] + add) / 1000, 1)
+        how = (f"EU15({eu15[col]/1000:.1f})−UK({uk[col]/1000:.1f})＋新規加盟{len(found)}か国"
+               f"＋バルト3国の残り(エストニア・リトアニア, {baltic_rest}千t)合算。"
+               f"{'・'.join(NOT_PRODUCERS)}は Table 4 に行なし（生産なし）")
+        check = {"new_members_found": found, "baltic_rest_kt": baltic_rest,
+                 "eu15_kt": eu15[col], "uk_kt": uk[col], "added_kt": add}
     else:
         sys.exit(f"! 未対応の年 {args.year}。2024(WSIF) か 1992-2001(SSY2002) を指定。")
 
+    if eu27 is None:
+        sys.exit("! EU27 の行が取れない（PDF の版・表の崩れを確かめる）。EU27=100% の行を空のまま書かない")
     stem = f"{datetime.date.today():%Y%m%d}_worldsteel_crude_{args.year}"
     with open(out / f"{stem}.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f); w.writerow(["country", "crude_steel_Mt", "share_eu27_pct"])
@@ -137,7 +174,10 @@ def main():
             v = recs[c]; w.writerow([c, v, round(v / eu27 * 100, 2) if (v and eu27) else None])
         w.writerow(["EU27", eu27, 100.0])
     meta = {"source": "World Steel Association (worldsteel)", "url": url, "year": args.year,
-            "unit": "million tonnes crude steel", "eu27_method": how,
+            "unit": "million tonnes crude steel", "eu27_method": how, "eu27_check": check,
+            "countries": wanted,
+            "not_found": [c for c in wanted if recs[c] is None],
+            "scope": f"指定した {len(wanted)} か国の抜粋＋EU27 合計（世界・EU加盟国全部の一覧ではない）",
             "note": "WSIFは百万t・EU27直接報告／SSY2002は千t・列1992-2001でEU27は合算。'Apparent steel use'(消費)と混同しない。Wikipedia不使用。",
             "retrieved_at": datetime.datetime.now().astimezone().isoformat()}
     (out / f"{stem}.metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")

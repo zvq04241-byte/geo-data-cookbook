@@ -1,0 +1,23 @@
+# 気象庁 主要都市 年降雪量合計 2024寒候年 上位15 — リファレンス値
+# fetch.py の既定（--year 2024 --metric snowfall --top-n 15）に対応。
+# 不変条件: 北海道の豪雪都市が上位／無雪の大都市は上位に出ない／降順・単位cm・全行2024。
+
+fetch_args: "--year 2024 --top-n 15"
+
+expected:
+  row_count: 15
+  # 旭川・札幌・青森は通常の冬なら必ず上位6に入る豪雪都市
+  must_include_in_topN:
+    n: 6
+    areas: ["旭川", "札幌", "青森"]
+  # 東京・大阪は降雪ほぼ無く、上位15に現れたら列/年の取り違え
+  must_not_include_anywhere:
+    - "東京"
+    - "大阪"
+  value_descending: true
+  year_value: 2024
+  unit: "cm"
+  # ★値域チェック（2026-07-21 追加）。年降雪量合計(cm)。実測は旭川495cm〜新潟78cm。
+  #   m と cm の取り違え（÷100）や日最大値との混同を落とす。
+  value_within_range:
+    Value: {min: 10, max: 2000}

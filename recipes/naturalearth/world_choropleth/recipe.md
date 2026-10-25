@@ -5,7 +5,7 @@ task: 国レベル階級区分図（コロプレス）の描画
 items: [png, pdf, svg, metadata_json]
 tags: [naturalearth, choropleth, render, map, classification, quantile, plate-carree, no-auth]
 summary: Natural Earth 50m admin_0 を境界に CSV（国コード+値）を結合し、N分位で階級分類してPNG+PDF（日本語安全）を出力する描画レシピ
-verified_at: 2026-06-24
+verified_at: 2026-10-26
 complexity: medium
 auth_required: false
 gotcha_count: 5
@@ -22,7 +22,7 @@ pattern: ne50m-admin0 + csv-join + quantile-classify + platecarree-render + svg2
 入力 CSV（国コード列＋値列）と切り出し bbox を渡すと、Natural Earth 50m admin_0 に結合し、
 N分位で階級化して PNG + PDF + SVG + metadata.json を出力する。
 
-★ この描画部を毎回ゼロから書くと、図法・PDF文字化け・国の欠落で必ず失敗する（EU難民地図・欧州外国人地図で実証）。
+★ この描画部は、図法・PDF文字化け・国の欠落でつまずきやすい。
    本レシピはその**3つの確定パターンをコード化**したもの。
 
 ## API情報
@@ -47,19 +47,27 @@ python render.py \
 | `--csv` | 国コード列＋値列を含むCSV（必須） |
 | `--code-col` / `--value-col` | コード列名／値列名（必須） |
 | `--code-kind` | `iso_a2`（2文字）／`name`（英語国名）／`auto`（既定: 長さで判定） |
-| `--classify-n` | 階級数（既定3。3なら青→黄→赤、N>3は RdYlBu を等分） |
-| `--bbox` | 切り出し範囲 `西 東 南 北`（経度・緯度） |
+| `--classify-n` | 階級数（既定3。3なら手置きの青→黄→赤、それ以外は RdYlBu_r を等分） |
+| `--bbox` | 切り出し範囲 `西 東 南 北`（経度・緯度）。**必須**（旧版は既定が欧州で、渡し忘れると黙って欧州図になった）。世界図は `-180 180 -90 90` |
+| `--projection` | `platecarree`（既定・正方形図法）／`albers`（正積円錐）／`laea`（正積方位）／`cea`（正積円筒） |
 | `--title` / `--unit` / `--source` | タイトル／凡例単位／出典注記 |
 
-出力: `<basename>.png`（300dpi）/ `.svg` / `.pdf`（Inkscapeがあれば）/ `_metadata.json`（境界・SHA256・未結合コード）
+出力: `<basename>.png`（300dpi）/ `.svg` / `.pdf`（Inkscapeがあれば）/ `_metadata.json`（境界・SHA256・未結合コード・`scope`＝表示範囲と色を付けた国の数）
+
+★**分位は地図に結合できた国の値だけで切る。** 未結合のコード（World・EU などの集計行、表記ゆれの国名）は
+分位にも入れない（旧版は CSV 全行で切っていたため、集計行の大きな値が凡例の最上位境界になり得た）。
+同じ国が2行ある／2文字コードと国名が混在する／分位の境界が重なる、のいずれかなら止まる。
+`--code-kind name` は Natural Earth の `ADMIN`（英語国名）と完全一致で結合する。表記ゆれは未結合として報告されるので、ISO_A2 を使う方が確実。
 
 ## ハマり所（重要）
 
-### 1. 図法は正方形図法（PlateCarree＝投影なし matplotlib 直描き）
-階級区分図には**正方形図法**で十分かつ最適。Albers/Lambert/EqualEarth を試すと、cartopy の
-`transform` 適用で色が出ない・国土形状に色が合わない等で必ず迷走する（実証済み）。
-`fig, ax = plt.subplots()` で投影なしに `gdf.plot()`、範囲は `set_xlim/set_ylim` で決める。
-**面積比も保たれ、地図帳の標準座標と一致して直感的。**
+### 1. 図法の既定は正方形図法（PlateCarree＝投影なし matplotlib 直描き）
+既定は**正方形図法**。`fig, ax = plt.subplots()` で投影なしに `gdf.plot()`、範囲は `set_xlim/set_ylim` で決める。
+緯度経度がそのまま軸に読め、地図帳の経緯線と対応が取りやすい。
+★**正方形図法は正積ではない**（高緯度ほど東西に引き伸ばされ、面積が誇張される）。面積の印象が問題になる図は
+`--projection albers`（中緯度の東西に広い地域）か `laea` を使う。再投影は cartopy でなく geopandas の `to_crs` で行う（本スクリプトの実装）。
+再投影する図法では、表示枠を緯度経度に戻した範囲＋2°で先にクリップする（滲み線の除去）。
+旧版は bbox±8°で切っていたため、円錐・方位図法では枠の上隅（欧州 -30..50 の albers で経度 -68..88°まで見える）の陸が切られて白く抜けていた（2026-10-26 に直した）。
 
 ### 2. PDFは matplotlib 直書きでなく SVG → Inkscape 変換
 matplotlib の `savefig(pdf)` / `PdfPages` は**日本語が文字化けする**（フォント埋め込みが不確実）。
@@ -95,8 +103,8 @@ Eurostat は **ギリシャ=EL / 英国=UK** と ISO とずれる。`GEO_FIXUP =
 2. 当たらない隅が見つかればそこに置く＝従来どおりの見た目
 3. どの隅も当たるときだけ凡例軸へ逃がし、`fit_legend_axis()` で帯を実寸に詰める
 
-検証: 欧州図（bbox -30 50 34 75）は `upper left`、隅まで陸で埋まる
-bbox -5 25 35 55 では `outside` に自動で切り替わることを確認。
+検証: 隅まで陸で埋まる bbox（-5 25 35 55）では `outside` に切り替わることを 2026-09-05 に確認。
+どの隅に置かれるかはデータと lib の版で変わる（欧州図 -30 50 34 75 は、2026-10-26 の実行で正方形図法 `upper right`・albers `lower left`）。
 
 ★教訓は「予防が検出に勝つ」ではない。**予防のコストが常時かかるなら、
   検出して自動で直す方がよい**。人が手で直さずに済むことが目的で、
@@ -122,7 +130,7 @@ bbox -5 25 35 55 では `outside` に自動で切り替わることを確認。
 - ✅ 認証不要
 
 ## このレシピを使うLLMへのヒント
-1. **図法で悩むな**＝正方形図法（PlateCarree）一択。複雑な投影は教材では逆効果。
+1. **図法の既定は正方形図法**（PlateCarree）。正積が要るときだけ `--projection albers/laea`。
 2. **PDFは必ず SVG 経由**。matplotlib 直 PDF は日本語が化ける。
 3. **国を消すな**＝centroid で絞らず xlim/ylim。結合の未一致は必ず報告。
 4. データ取得（分類前のCSV）は各データ源レシピ（eurostat/world_bank/owid…）で。本レシピは描画専任。

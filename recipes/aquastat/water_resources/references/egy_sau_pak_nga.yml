@@ -1,0 +1,21 @@
+# AQUASTAT 水資源賦存量 既定4カ国（EGY・SAU・PAK・NGA） — リファレンス値
+# fetch.py 既定（--countries EGY,SAU,PAK,NGA）の CSV を採点。
+# 列: iso3, country, irwr_km3, trwr_km3, external_km3, external_pct, population_million,
+#     trwr_per_capita_m3, year_trwr, year_irwr, year_per_capita, obs_status_trwr, obs_status_irwr ほか（fetch.py の cols）。
+# 「総TRWRと国内IRWRの差＝外来河川（上流国）依存」を見せる教材用。ランキングでない。
+# 値は年次更新で動くため、(a)4カ国そろう (b)外来依存率が0–100%に収まる
+#   (c)賦存量・1人当たりの桁、という不変条件で採点。EGY≈98%(ナイル下流)/SAU≈0(河川なし)。
+fetch_args: "--countries EGY,SAU,PAK,NGA"
+
+expected:
+  area_column: "iso3"
+  value_column: "trwr_km3"
+  row_count: 4
+  must_include_in_topN:
+    n: 4
+    areas: ["EGY", "SAU", "PAK", "NGA"]
+  # 外来依存率は定義上 0–100%。総賦存量・1人当たりの桁スパン。指標取り違え・桁誤りを検出。
+  value_within_range:
+    external_pct: {min: 0, max: 100}
+    trwr_km3: {min: 0, max: 1000}
+    trwr_per_capita_m3: {min: 0, max: 100000}

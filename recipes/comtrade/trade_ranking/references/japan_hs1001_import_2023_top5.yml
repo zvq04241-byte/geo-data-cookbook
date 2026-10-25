@@ -1,0 +1,25 @@
+# UN Comtrade 日本 (392) HS1001 (小麦) 輸入 (M) 2023 上位5 — リファレンス値
+# 日本の小麦輸入相手国は 米・豪・加 が常に上位3を独占する構造的事実。
+
+fetch_args: "--reporter 392 --hs 1001 --flow M --year 2023 --top-n 5"
+
+expected:
+  area_column: "partner_jp"
+  value_column: "value_usd"
+  row_count: 5
+  top1_area: "アメリカ"
+  must_include_in_top5:
+    - "アメリカ"
+    - "カナダ"
+    - "オーストラリア"
+  must_not_include_anywhere:
+    - "World"
+    - "Asia"
+    - "EU"
+    - ""  # 空 partner
+  value_descending: true
+  # ★値域チェック（2026-07-21 追加）。順位系だけでは「順位は合っているが桁が違う」
+  #   （USD↔千USD、数量と金額の取り違え）を検出できない。実測は
+  #   1位 米 7.63億USD 〜 5位 独 3.9万USD と幅が広いので下限は緩めに取る。
+  value_within_range:
+    value_usd: {min: 10000, max: 5000000000}

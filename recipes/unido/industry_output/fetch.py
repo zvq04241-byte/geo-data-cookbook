@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 """fetch.py — UNIDO INDSTAT から業種別の工業生産額（Output）を取得する。
 
-『世界国勢図会』『日本国勢図会』の「工業生産額」はUNIDO由来。教材の図表を検算する
-ときは World Bank ではなく UNIDO を一次に取る。
+工業生産額（産出額 output）を検算するときは World Bank（付加価値）ではなく UNIDO を一次に取る。
+4か国以上は3か国ずつに分けて取り、結合する（API の上限が1回3か国）。
 
-  python fetch.py --countries 682,050,704 --year 2022 --rev 3 --output-dir ./output
-  python fetch.py --countries 036 --year 2022 --rev 4 --indicator 20   # 付加価値
+  python fetch.py --countries 682,050,704 --start 2015 --end 2023 --rev 3 --output-dir ./output
+  python fetch.py --countries 036 --start 2022 --end 2022 --rev 4 --indicator 20   # 付加価値
 
 出力: <日付>_unido_indstat_r{3,4}_output.csv と _metadata.json
 """
@@ -57,6 +57,9 @@ def _get(url: str, kind: str, tries: int = 3):
 
 def dataflows() -> list:
     d = _get(f"{BASE}/sdmx/dataflow/UNIDO/all/latest", "dataflow")
+    flows = (d.get("data") or {}).get("dataflows")
+    if isinstance(flows, list):          # SDMX-JSON の dataflows 配列だけを読む
+        return [(f.get("id"), f.get("name") or (f.get("names") or {}).get("en")) for f in flows]
     out = []
     def walk(o):
         if isinstance(o, dict):
@@ -69,33 +72,41 @@ def dataflows() -> list:
     return out
 
 
+FIELDS = ["country", "indicator", "isic", "combo", "year", "value"]
+
+
 def fetch_data(flow: str, countries: list[str], indicator: str,
                start: str, end: str) -> list[dict]:
     """キーは countries.indicators.classification.classification_combination の4段。
 
     ★空の段は許されない（「Remove leading, trailing, or consecutive dots」）。
-      全件は * で指定する。国は1回あたり3か国まで。
+      全件は * で指定する。国は1回あたり3か国まで（4か国で 400「up to three countries」を確認）。
+      ここでは3か国ずつに分けて取り、結合する。
     """
-    if len(countries) > 3:
-        raise FetchError("国は1回あたり3か国まで（APIの制限）", None, "too_many_countries")
-    key = f"{'+'.join(countries)}.{indicator}.*.*"
-    url = f"{BASE}/sdmx/data/UNIDO/{flow}/latest/{key}?startPeriod={start}&endPeriod={end}"
-    d = _get(url, "data")
     rows = []
-    for k, s in d["data"]["dataSets"][0]["series"].items():
-        c, ind, isic, combo = k.split(".")
-        for yr, v in s["observations"].items():
-            val = v[0][0] if isinstance(v[0], list) else v[0]
-            rows.append({"country": c, "indicator": ind, "isic": isic,
-                         "combo": combo, "year": yr, "value": val})
+    for i in range(0, len(countries), 3):
+        batch = countries[i:i + 3]
+        key = f"{'+'.join(batch)}.{indicator}.*.*"
+        url = f"{BASE}/sdmx/data/UNIDO/{flow}/latest/{key}?startPeriod={start}&endPeriod={end}"
+        d = _get(url, "data")
+        sets = (d.get("data") or {}).get("dataSets") or []
+        if not sets:
+            raise FetchError("応答に dataSets が無い", url, "shape")
+        for k, s in (sets[0].get("series") or {}).items():
+            c, ind, isic, combo = k.split(".")
+            for yr, v in (s.get("observations") or {}).items():
+                val = v[0][0] if isinstance(v[0], list) else v[0]
+                rows.append({"country": c, "indicator": ind, "isic": isic,
+                             "combo": combo, "year": yr, "value": val})
     return rows
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--countries", required=True, help="ISO3166 数字コード カンマ区切り（最大3）")
+    ap.add_argument("--countries", help="ISO3166 数字コード カンマ区切り（4か国以上は3か国ずつ取って結合）")
     ap.add_argument("--rev", default="3", choices=["3", "4"], help="ISIC Rev.（既定3）")
-    ap.add_argument("--indicator", default="14", help="14=Output（既定） 20=Value added 04=Employees")
+    ap.add_argument("--indicator", default="14",
+                    help="14=Output（既定） 20=Value added。ほかに 01/04/05/31 が応答に現れる（名前はこのレシピでは未確認）")
     ap.add_argument("--start", default="2015")
     ap.add_argument("--end", default="2023")
     ap.add_argument("--output-dir", default="./output")
@@ -106,6 +117,8 @@ def main() -> int:
         for i, n in dataflows(): print(f"  {i:<14} {n}")
         return 0
 
+    if not a.countries:
+        ap.error("--countries が要る（--list-flows 以外）")
     flow = f"INDSTAT_R{a.rev}"
     cs = [c.strip() for c in a.countries.split(",") if c.strip()]
     rows = fetch_data(flow, cs, a.indicator, a.start, a.end)
@@ -116,13 +129,23 @@ def main() -> int:
     stamp = datetime.now(JST).strftime("%Y%m%d")
     csv_p = out / f"{stamp}_unido_indstat_r{a.rev}_ind{a.indicator}.csv"
     with open(csv_p, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+        w = csv.DictWriter(f, fieldnames=FIELDS); w.writeheader(); w.writerows(rows)
+    got = sorted({r["country"] for r in rows})
+    missing = [c for c in cs if c not in got]
+    years = sorted({r["year"] for r in rows})
+    scope = (f"指定の{len(cs)}か国（{','.join(cs)}）のうち値のあった{len(got)}か国"
+             + (f"（値なし {','.join(missing)}）" if missing else "")
+             + f"。{flow}・indicator {a.indicator}・要求期間 {a.start}-{a.end} のうち値のある年 {','.join(years)}")
+    if missing:
+        print(f"  ! 値の無い国: {missing}", file=sys.stderr)
     meta = {
         "task_name": "unido_industry_output",
         "source": {"name": f"UNIDO {flow}", "url": f"{BASE}/sdmx/data/UNIDO/{flow}/latest/...",
                    "single_source": True},
         "note": "値は自国通貨。ドル換算は別途（例: World Bank PA.NUS.FCRF 期中平均）",
-        "countries": cs, "indicator": a.indicator, "period": [a.start, a.end],
+        "rev": a.rev, "scope": scope,
+        "countries_requested": cs, "countries_with_data": got, "countries_without_data": missing,
+        "indicator": a.indicator, "period_requested": [a.start, a.end], "years_present": years,
         "row_count": len(rows),
         "csv_sha256": hashlib.sha256(csv_p.read_bytes()).hexdigest(),
         "fetched_at": datetime.now(JST).isoformat(),

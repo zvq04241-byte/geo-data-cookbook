@@ -114,12 +114,8 @@ def filter_country_year(
 
 def rank_top_n(rows: list[dict], top_n: int) -> list[dict]:
     """PopTotal (千人単位) で降順ソート → 上位N。"""
-    def _to_float(r):
-        try:
-            return float(r["PopTotal"])
-        except (ValueError, TypeError):
-            return 0.0
-    sorted_rows = sorted(rows, key=_to_float, reverse=True)
+    # 数値にならない値を 0.0 にして末尾へ紛れ込ませない（呼ぶ前に除いて数える）
+    sorted_rows = sorted(rows, key=lambda r: float(r["PopTotal"]), reverse=True)
     result = []
     for rank, r in enumerate(sorted_rows[:top_n], 1):
         pop_thousand = float(r["PopTotal"])
@@ -149,7 +145,7 @@ def save_csv(rows: list[dict], out_path: Path) -> None:
 
 def save_metadata(
     meta_path: Path, *, year: int, variant: str, top_n: int,
-    out_csv: Path, raw_gz: Path, row_count: int,
+    out_csv: Path, raw_gz: Path, row_count: int, extra: dict,
 ) -> dict:
     meta = {
         "task_name": f"wpp_population_ranking_{year}_{variant.lower()}_top{top_n}",
@@ -170,11 +166,13 @@ def save_metadata(
         "csv_sha256": sha256_of(out_csv),
         "csv_size_bytes": out_csv.stat().st_size,
         "row_count": row_count,
+        **extra,
         "raw_gz_sha256": sha256_of(raw_gz),
         "missing_value_treatment": "PopTotal 空欄行は除外（推測補完なし）",
         "notes": (
-            "Variant=Medium は中位推計（最頻使用）。Low/High も同じファイルに含む。"
-            "LocTypeID=4 が国レベル、=2 が地域、=1 が世界。"
+            "Variant=Medium は中位推計（最頻使用）。Low/High も同じファイルに含む（Medium 以外は2024年から）。"
+            "LocTypeID=4（LocTypeName=Country/Area）は独立国でない地域（香港・台湾・プエルトリコ等）を含む。"
+            "=2 が地域、=1 が世界。"
         ),
     }
     meta_path.parent.mkdir(parents=True, exist_ok=True)
@@ -203,6 +201,12 @@ def main() -> int:
     ap.add_argument("--cache", type=Path, default=None,
                     help="既存 gz ファイルを直接指定（ダウンロード省略）")
     args = ap.parse_args()
+    if args.top_n < 1:
+        ap.error("--top-n は1以上")
+    if not 1950 <= args.year <= 2100:
+        ap.error("--year は 1950〜2100（WPP 2024 の収録範囲）")
+    if args.variant != "Medium" and args.year < 2024:
+        ap.error(f"Variant={args.variant} は2024年以降だけ（2023年以前は Medium のみ）")
 
     # Win cmd.exe (CP932) 対策
     sys.stdout.reconfigure(encoding="utf-8")
@@ -237,21 +241,50 @@ def main() -> int:
 
     # ─── ロード・フィルタ・ランキング ───
     logging.info("CSV読み込み中（大ファイル、数秒かかる）")
-    all_rows = load_wpp_csv(gz_path)
+    try:
+        all_rows = load_wpp_csv(gz_path)
+    except (OSError, EOFError, UnicodeDecodeError, csv.Error) as e:
+        logging.error("gz の読み込み失敗（壊れたキャッシュ？）: %s: %s", gz_path, e)
+        return 1
     logging.info("全レコード: %d", len(all_rows))
 
+    # 母集団（LocTypeID=4・指定年・variant）を、欠損を落とす前に数える
+    year_str = str(args.year)
+    base = [r for r in all_rows if r.get("Variant") == args.variant
+            and r.get("LocTypeID") == LOC_TYPE_COUNTRY and r.get("Time") == year_str]
     filtered = filter_country_year(all_rows, args.year, args.variant)
-    logging.info("フィルタ後 (year=%d, variant=%s, country): %d",
-                 args.year, args.variant, len(filtered))
+    dropped_blank = sorted(r.get("Location", "") for r in base if not r.get("PopTotal", "").strip())
+    nonnum = []
+    for r in list(filtered):
+        try:
+            float(r["PopTotal"])
+        except (ValueError, TypeError):
+            nonnum.append(r.get("Location", "")); filtered.remove(r)
+    logging.info("フィルタ後 (year=%d, variant=%s, country): %d（PopTotal 空欄で除外 %d・数値でなく除外 %d）",
+                 args.year, args.variant, len(filtered), len(dropped_blank), len(nonnum))
+    if dropped_blank or nonnum:
+        logging.warning("除外した地域: 空欄 %s / 非数値 %s", dropped_blank, nonnum)
     if not filtered:
         logging.error("該当データなし")
         return 1
 
+    # 検算: 国・地域の合計を世界（LocTypeID=1）と照らす
+    world = [r for r in all_rows if r.get("Variant") == args.variant
+             and r.get("LocTypeID") == LOC_TYPE_WORLD and r.get("Time") == year_str]
+    world_k = float(world[0]["PopTotal"]) if world else None
+    sum_k = sum(float(r["PopTotal"]) for r in filtered)
+    if world_k:
+        logging.info("検算: 国・地域の合計 %.1f千人 / 世界 %.1f千人（%.2f%%）",
+                     sum_k, world_k, 100 * sum_k / world_k)
+
     ranked = rank_top_n(filtered, args.top_n)
+    if len(ranked) < args.top_n:
+        logging.warning("要求 %d 件に対し %d 件しかない", args.top_n, len(ranked))
 
     # ─── 出力 ───
     today = datetime.now().strftime("%Y%m%d")
-    slug = f"{today}_wpp_population_{args.year}_{args.variant.lower()}_top{args.top_n}"
+    vslug = args.variant.lower().replace(" ", "_")
+    slug = f"{today}_wpp_population_{args.year}_{vslug}_top{args.top_n}"
     out_csv = args.output_dir / f"{slug}.csv"
     out_meta = args.output_dir / f"{slug}_metadata.json"
 
@@ -259,6 +292,15 @@ def main() -> int:
     meta = save_metadata(
         out_meta, year=args.year, variant=args.variant, top_n=args.top_n,
         out_csv=out_csv, raw_gz=gz_path, row_count=len(ranked),
+        extra={
+            "scope": (f"WPP 2024 の Country/Area（LocTypeID=4）{len(filtered)}件の中での順位"
+                      "（独立国でない地域を含む）"),
+            "n_candidates": len(filtered),
+            "dropped_blank_poptotal": dropped_blank,
+            "dropped_nonnumeric_poptotal": nonnum,
+            "check_sum_vs_world": {"sum_thousand": round(sum_k, 3),
+                                   "world_thousand": world_k},
+        },
     )
     logging.info("出力: %s (%d rows, sha256=%s…)",
                  out_csv, len(ranked), meta["csv_sha256"][:12])

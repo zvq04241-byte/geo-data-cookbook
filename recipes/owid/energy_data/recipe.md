@@ -5,10 +5,10 @@ task: 国別エネルギー構成・絶対量取得
 items: [一次エネルギー構成比, 発電量, 各エネルギー源消費量]
 tags: [owid, energy, mix, share, abs, country-level, github-csv, ttl-cache]
 summary: Our World in Data energy-data から指定国の一次エネルギー構成（share / abs）を取得
-verified_at: 2026-05-18
+verified_at: 2026-10-26
 complexity: medium
 auth_required: false
-data_size_mb: 25  # 単一CSV
+data_size_mb: 9  # 単一CSV（2026-10-26 に 9.2MB）
 ---
 
 # owid / energy_data
@@ -21,9 +21,9 @@ Our World in Data (OWID) の energy-data リポジトリから、指定国・期
 - **URL**: `https://raw.githubusercontent.com/owid/energy-data/master/owid-energy-data.csv`
 - **認証**: 不要（GitHub raw 公開）
 - **形式**: 単一CSV、全部入り（国 × 年 × 全カラム）
-- **データ規模**: 約 25MB / 約 22,000 行 / 100+ カラム
-- **基礎統計**: IEA + BP Statistical Review + Ember を OWID が統合
-- **更新頻度**: 年1〜2回（IEA / BP の更新を反映）
+- **データ規模**: 2026-10-26 に取得した版で 9.2MB / 23,377 行 / 130 列（1900〜2025年）
+- **基礎統計**: Energy Institute（旧 BP）Statistical Review・EIA・Ember 等を OWID が統合（行の出典は国名の括弧書き (EI)/(EIA)/(Ember) に出る）
+- **更新**: 時期は決まっていない。取得した版を metadata の `raw_csv_sha256` で固定する
 - **TTL**: ファイルmtimeで管理、default 7日
 
 ## 使い方
@@ -55,7 +55,7 @@ python fetch.py --country Germany --year-from 2010 --year-to 2023 \
 | `--year-from` / `--year-to` | 年範囲 |
 | `--mode` | share / abs / metrics |
 | `--metrics` | mode=metrics で使う列名カンマ区切り |
-| `--step` | 年の間引き（例: 5 で5年毎） |
+| `--step` | 年の間引き（年が step で割り切れる年だけ残す。`--year-from 2013 --step 5` は 2015, 2020…） |
 | `--ttl-days` | キャッシュ有効日数（default: 7） |
 | `--cache` | 既存CSV を直接指定 |
 
@@ -68,10 +68,14 @@ python fetch.py --country Germany --year-from 2010 --year-to 2023 \
 |---|---|
 | 個別国 | `Japan`, `China`, `United States` |
 | 大陸 | `Africa`, `Asia`, `Europe`, `Oceania`, `North America`, `South America` |
-| 経済グループ | `OECD`, `Non-OECD`, `European Union (27)`, `G7`, `G20` |
+| 経済グループ | `OECD (EI)`, `Non-OECD (EI)`, `European Union (27)`, `G7 (Ember)`, `G20 (Ember)`（括弧なしの `OECD`・`G7` は無い） |
+| 出典別の地域 | `Africa (EI)`, `Middle East (EIA)`, `Europe (Ember)` など（同じ地域が出典ごとに別の行） |
 | 所得階級 | `High-income countries`, `Upper-middle-income countries`, `Low-income countries` |
 | 世界 | `World` |
-| 歴史的国家 | `USSR`, `Yugoslavia`, `Czechoslovakia` |
+| 歴史的国家 | `USSR`, `Yugoslavia`, `Czechoslovakia`, `East Germany`, `West Germany` |
+
+2026-10-26 の版では、`iso_code` が空か `OWID_` で始まる行が94種（国名）。国はふつう ISO3 を持つ
+（例外: `Kosovo` は `OWID_KOS`）。fetch.py は ISO3 を持たない行を指定すると警告し、metadata の `aggregate_like` に残す。
 
 教材でランキングする場合は **個別国だけにフィルタ** が必要（FAOSTAT の AGG_AREAS と同じ問題）。
 本レシピは単一国指定なので問題ないが、**ranking レシピを別途作る場合は明示除外必須**。
@@ -90,14 +94,17 @@ python fetch.py --country Germany --year-from 2010 --year-to 2023 \
 
 `--country` で見つからなければ部分一致候補を出すヘルパを実装している。
 
-### 3. 100% にならない構成比
-`{source}_share_energy` の合計が **常に 100% にはならない**。理由:
-- 主要5源（coal / oil / gas / nuclear / renewables）以外に `biofuels`, `other_renewables` 等の細目あり
-- データ欠損（特に古い年で renewables 列が null）
-- OWID 内部で換算誤差
+### 3. 構成比の合計（5源がそろえば100%）
+2026-10-26 に取得した版で測った（全 23,377 行）:
+- 5源（coal / oil / gas / nuclear / renewables）の `*_share_energy` が**すべてそろう行は 6,379**（国 4,459・集計 1,920）。
+  その合計は **最小 99.998%・最大 100.002%**（丸めの差だけ）。
+- `renewables` は hydro・wind・solar・other_renewables・biofuel を含む（World 2023年: 13.943 = 6.084+3.317+2.357+1.412+0.772）。
+  5源の外に取りこぼしは無い。
+- 5源の一部だけ欠ける行は0。欠けるときは5源とも欠ける（例: 日本の1964年以前）。
 
-本レシピでは合計列 `total_pct` を計算して出力するが、98〜102% の範囲なら正常。
-**「合計100%にならない」とユーザに指摘される前に metadata.json の notes に明記**。
+したがって fetch.py は、5源がそろう年の合計が **100±0.1%** を外れたら止める（列の定義が変わった合図）。
+欠けた年は `total_pct` を空にし、`missing_sources` に欠けた源を出す（欠けた分を除いた和を「合計」と呼ばない）。
+以前この節に書いていた「98〜102% なら正常」は測った根拠が無く、上の測定では幅が広すぎる（欠けた源があっても通る）ので外した。
 
 ### 4. share と consumption の単位の違い
 - `{source}_share_energy` = **% of primary energy**（一次エネルギー比）
@@ -108,21 +115,25 @@ python fetch.py --country Germany --year-from 2010 --year-to 2023 \
 「一次エネルギー」と「電力」は **概念が異なる**。一次エネルギーは「資源投入量」、電力は「最終発電量」。
 教材で混同すると致命的（例: 原子力の「発電シェア」と「一次エネルギーシェア」は数値が大きく異なる）。
 
-### 5. 集計値 World の扱い
-`country=World` の行は **個別国の合計**。data validation 用に使える：
-- 各国の `{source}_consumption` の合計 ≈ `World` の `{source}_consumption`
-- 一致しない場合は欠損あり or 換算差異
+### 5. 集計値 World は国の単純和と一致しない
+2026-10-26 の版の2023年で、ISO3 を持つ国の和と `World` を比べると:
+- `primary_energy_consumption`: World 172,239 TWh／国の和 171,277 TWh（99.4%。値のある国 218）
+- `coal_consumption`: World 45,319 TWh／国の和 44,611 TWh（98.4%。値のある国 79）
+国の値が無い分は出典の地域行（`Other ... (EI)` 等）にだけ入っている。World を「国の合計」として検算に使うなら、この差を許容幅に入れる。
 
-### 6. データ遅延（IEA/BP の更新サイクル）
-- 当年データはほぼ無い（IEA/BP は前年データを6-12か月遅れで発表）
-- 例: 2026年5月時点で最新は 2023 or 2024 年
-- 古い教材データと比較する時、「OWID の2020年値」と「他APIの2020年値」が異なることがある
+`abs` モードの `total_twh`（`primary_energy_consumption`）も5源の `*_consumption` の和と一致しない
+（同じ版の 6,379 行で 95.6〜102.9%、中央値 99.6%）。fetch.py は5源の和を `sum5_twh` 列に別に出す。
+
+### 6. 最新年は列で違う
+- 2026-10-26 に取得した版で、一次エネルギーの `*_share_energy` は**2024年まで**、発電の `*_electricity` 等は **2025年**の行がある
+  （2025年の行は106。Ember の速報が入る電力の列が先に延びる）
+- 同じ年でも、OWID の値と原典（Energy Institute など）や他の API の値は版によって違うことがある。比べるときは両方の版を書く
 
 ### 7. キャッシュ更新戦略
 `mtime` 基準の TTL（default 7日）。
 - ローカル開発: 7日で十分
 - 教材本番制作: 月1回の `--ttl-days 30` 程度
-- 緊急更新: `--ttl-days 0` で即時再ダウンロード
+- 緊急更新: `--ttl-days 0` で即時再ダウンロード（キャッシュの経過日数は 0 より大きいので常に古い扱いになる）
 
 GitHub raw は ETag を返すが本レシピは未対応（将来 ETag/If-Modified-Since 対応で帯域節約可能）。
 

@@ -9,7 +9,7 @@ verified_at: 2026-06-08
 complexity: medium
 auth_required: true
 auth_env_var: ESTAT_APP_ID
-gotcha_count: 8
+gotcha_count: 9
 pattern: live-rest-api + auth + two-indicator-difference
 ---
 
@@ -35,18 +35,22 @@ python fetch.py --time 2024100000 --output-dir ./output
 ```
 出力: `output/YYYYMMDD_estat_social_increase_2024.csv`
 （Rank,Area,Value(社会増加率),PopIncrease,NaturalIncrease,Year,Unit）＋ metadata.json。
+`--top-n N` を付けるとファイル名に `_topN` が付き、metadata の `scope` に「計算できたM都道府県の中での上位N件のみ」と書く。
+metadata には `pref_computed`（計算できた県の数）と `dropped_prefectures`（落とした県名）も出る。47に満たなければ警告する。
 
 ## ハマり所（重要）
 
 ### 1. 社会増加率は「人口増加率 − 自然増加率」（最重要・概念）
-人口増加率＝総人口の増減、自然増加率＝出生−死亡。その差が**社会増加率＝転入−転出**。
-3者を混同しない。社会増加率が正なら転入超過（人口流入）。
-例(2024): 東京都は人口+6.6‰・自然-3.7‰ → 社会**+10.3‰**（自然減を移流入が上回る）。
+人口増加率＝総人口の増減、自然増加率＝出生−死亡。本レシピはその差を**社会増加率**（転入超過の目安）とする。
+3者を混同しない。差が正なら転入超過（人口流入）。
+★2指標が同じ期間・同じ人口を分母にしているかは、このレシピでは確かめていない。差は「転入−転出」の統計値そのものではない。
+例(cdTime=2024100000): 東京都は人口+6.6‰・自然-3.7‰ → 差**+10.3‰**。
+（2026-06-20 に本レシピの手順で取得した CSV の値。47都道府県・単位‰。記録は `references/verify_2024.md`）
 
 ### 2. 同一統計表の2つの cdCat01 を別々に取得して差を取る
 人口増加率と自然増加率は**同じ statsDataId(0000010101) の別 cdCat01**。
-1回のクエリでは両方取れないので、`cdCat01=A192003` と `cdCat01=A4401` で2回取得し、
-都道府県名で突き合わせて引き算する。
+このスクリプトは `cdCat01=A192003` と `cdCat01=A4401` を2回に分けて取得し、
+**area code で突き合わせて**引き算する（名前で突き合わせると表記ゆれで黙って県が落ちる）。
 
 ### 3. appId をログ・出力に出さない（漏洩防止）
 httpx は INFO で appId 入りの完全 URL を出力する。**`logging.getLogger("httpx").setLevel(WARNING)`** で抑止。
@@ -70,6 +74,11 @@ area の表示名は `CLASS_INF.CLASS_OBJ` から引くが、先頭に `【13】
 
 ### 8. 両指標が揃う都道府県のみ計算
 片方の指標が欠損する都道府県は社会増加率を出せないので除外する（推測補完しない）。
+除外した県は metadata の `dropped_prefectures` に名前で残し、計算できた数が47でなければ警告する。
+
+### 9. limit の打ち切りを止める
+`limit=20000` を超えると e-Stat は `RESULT_INF.NEXT_KEY` を付けて残りを返さない。
+fetch.py は NEXT_KEY があれば `TRUNCATED` で止める（黙って欠けたまま出力しない）。
 
 ## 効くケース
 - 都道府県別 社会増加率ランキング（人口移動の教材データ）

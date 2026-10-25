@@ -4,9 +4,9 @@ World Bank Indicators API V2 から、指定インジケータを指定国群に
 取得し、最新値ランキング or 時系列を CSV + metadata.json に保存する。
 
 使い方:
-    # GDP (current US$) の上位30か国ランキング
+    # GDP (current US$) の上位30か国ランキング（集計地域を除く全ての国・地域の中で）
     python fetch.py --indicator NY.GDP.MKTP.CD --mode ranking --top-n 30 \\
-        --output-dir ./output
+        --all-countries --output-dir ./output
 
     # 日本/韓国/中国の人口時系列 (2000-2023)
     python fetch.py --indicator SP.POP.TOTL --mode trend \\
@@ -14,7 +14,8 @@ World Bank Indicators API V2 から、指定インジケータを指定国群に
 
 このレシピが扱う範囲:
 - 単一インジケータ × 国群 × ranking or trend
-- 主要50か国デフォルトリスト（カスタム指定可）
+- 既定は手で並べた49か国（世界順位ではない）。--all-countries で集計地域を除く全ての国・地域
+- ranking では集計地域（WLD・EUU・所得階層など。国メタデータの region が Aggregates）を必ず除く
 - 認証不要（公開API）
 
 このレシピが扱わない範囲:
@@ -37,13 +38,10 @@ import httpx
 # ─── 定数 ───
 WB_BASE = "https://api.worldbank.org/v2"
 
-# ranking モード時のデフォルト国群（主要 49 か国、ISO3）
-# 注意:
-#   World Bank API は TWN（台湾）に対し page=0/total=0 を返す（多くの indicator
-#   で台湾データは中国に統合される）。50カ国一括クエリ時に TWN を含めると、
-#   全体が 4xx エラーになる現象が確認されている（2026-05-23）。
-#   → デフォルトリストから TWN を除外。
-#   台湾を含めたい場合は --countries で明示的に渡す（ただしデータは空）。
+# ranking モード時のデフォルト国群（手で並べた 49 か国、ISO3）。**世界順位ではない**。
+# 世界順位が要るときは --all-countries。どちらで並べたかは出力の scope に出る。
+# TWN（台湾）は値が返らない（page=0/total=0）ので外している。2026-05-23 に TWN を含む一括で
+# 4xx を観測したが、2026-10-26 の再試行では 200 OK で再現しなかった（recipe.md ハマり所11）。
 DEFAULT_COUNTRIES = [
     "USA", "CHN", "JPN", "DEU", "IND", "GBR", "FRA", "ITA", "CAN", "BRA",
     "RUS", "KOR", "AUS", "ESP", "MEX", "IDN", "NLD", "TUR", "CHE", "SAU",
@@ -133,11 +131,38 @@ def fetch_wb_indicator(
     )
 
 
+def fetch_aggregate_codes(*, retries: int = 3, timeout: int = 60) -> tuple[set[str], int, str]:
+    """World Bank の国メタデータから集計地域（region が Aggregates）の ISO3 を返す。
+
+    Returns: (集計地域の ISO3 集合, 集計でない国・地域の数, request_url)
+    取れなければ DataFetchError（集計地域を除けないまま順位を出さない）。
+    """
+    url = f"{WB_BASE}/country"
+    last_err = None
+    for i in range(retries):
+        try:
+            r = httpx.get(url, params={"format": "json", "per_page": "1000"}, timeout=timeout)
+            r.raise_for_status()
+            data = r.json()
+            if not isinstance(data, list) or len(data) < 2 or not data[1]:
+                raise DataFetchError("World Bank", url, "UNEXPECTED_RESPONSE", str(data)[:200])
+            meta, rows = data
+            if int(meta.get("total") or 0) != len(rows):
+                raise DataFetchError("World Bank", url, "INCOMPLETE_PAGING",
+                                     f"国メタデータ {len(rows)} 件 < total {meta.get('total')}")
+            agg = {c["id"] for c in rows if (c.get("region") or {}).get("value", "").strip() == "Aggregates"}
+            return agg, len(rows) - len(agg), url
+        except (httpx.HTTPError, DataFetchError, ValueError) as e:
+            last_err = e
+            logging.warning("country metadata retry %d/%d: %s", i + 1, retries, e)
+    raise DataFetchError("World Bank", url, "HTTP_FAIL",
+                         f"国メタデータを取得できない（集計地域を除けない）: {last_err}")
+
+
 def latest_per_country(rows: list[dict]) -> dict[str, dict]:
     """各国の最新非null値を抽出。
 
-    World Bank API は古い年から新しい年へ降順ソートされて返るが、
-    null も混じる。最新の非null を取得する。
+    返る順序には頼らない（null も混じる）。国ごとに年を比べて最新の非null を取る。
     """
     by_cc: dict[str, dict] = {}
     for r in rows:
@@ -153,7 +178,7 @@ def latest_per_country(rows: list[dict]) -> dict[str, dict]:
 
 
 def build_ranking(
-    by_cc: dict[str, dict], top_n: int, indicator_name: str,
+    by_cc: dict[str, dict], top_n: int, indicator_name: str, scope: str = "",
 ) -> list[dict]:
     rows = []
     sorted_items = sorted(
@@ -169,6 +194,7 @@ def build_ranking(
             "year": r.get("date", ""),
             "value": r.get("value"),
             "indicator": r.get("indicator", {}).get("id", "") if isinstance(r.get("indicator"), dict) else indicator_name,
+            "scope": scope,
         })
     return rows
 
@@ -211,6 +237,7 @@ def save_csv(rows: list[dict], out_path: Path) -> None:
 def save_metadata(
     meta_path: Path, *, indicator: str, mode: str, countries: list[str],
     mrv: int, request_url: str, out_csv: Path, row_count: int,
+    extra: dict | None = None,
 ) -> dict:
     meta = {
         "task_name": f"wb_{indicator}_{mode}_{datetime.now().strftime('%Y%m%d')}",
@@ -234,9 +261,12 @@ def save_metadata(
         "missing_value_treatment": "value=null は除外（推測補完なし）",
         "notes": (
             "World Bank API は data[1] が値配列、data[0] はメタ。"
-            "各国で最新非null年が異なるため metadata の year 列を必ず確認。"
+            "ranking は各国の最新非null年の値で並べる。国ごとに年が違うことがある"
+            "（year_min / year_max と CSV の year 列を確認）。"
         ),
     }
+    if extra:
+        meta.update(extra)
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     meta_path.write_text(
         json.dumps(meta, ensure_ascii=False, indent=2),
@@ -254,13 +284,15 @@ def main() -> int:
     ap.add_argument("--mode", default="ranking", choices=["ranking", "trend"],
                     help="ranking=最新値順位 / trend=国×年時系列")
     ap.add_argument("--countries", default="",
-                    help="ISO3 カンマ区切り (例: JPN,USA,CHN). 省略時は主要50か国")
+                    help="ISO3 カンマ区切り (例: JPN,USA,CHN). 省略時は既定49か国（世界順位ではない）")
+    ap.add_argument("--all-countries", action="store_true",
+                    help="集計地域を除く全ての国・地域で取る（ranking を世界順位にするとき）")
     ap.add_argument("--top-n", type=int, default=30,
                     help="ranking モードの上位N (default: 30)")
     ap.add_argument("--year-from", type=int, default=2000,
                     help="trend モードの開始年 (default: 2000)")
     ap.add_argument("--mrv", type=int, default=10,
-                    help="Most Recent Values の取得年数 (default: 10)")
+                    help="Most Recent Values の取得年数 (default: 10)。trend では --year-from から今年までの年数に自動で広げる")
     ap.add_argument("--output-dir", type=Path, default=Path("./output"),
                     help="出力ディレクトリ")
     args = ap.parse_args()
@@ -275,10 +307,17 @@ def main() -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    countries = (
-        [c.strip().upper() for c in args.countries.split(",") if c.strip()]
-        if args.countries else DEFAULT_COUNTRIES
-    )
+    if args.all_countries and args.countries:
+        ap.error("--all-countries と --countries は同時に使えない")
+    if args.all_countries:
+        countries = ["all"]
+        scope_kind = "all"
+    elif args.countries:
+        countries = [c.strip().upper() for c in args.countries.split(",") if c.strip()]
+        scope_kind = "given"
+    else:
+        countries = DEFAULT_COUNTRIES
+        scope_kind = "default"
     mrv = max(args.mrv, (datetime.now().year - args.year_from + 1)
               if args.mode == "trend" else args.mrv)
 
@@ -301,10 +340,49 @@ def main() -> int:
         return 1
     logging.info("生レコード: %d 件", len(raw_rows))
 
+    extra: dict = {}
     if args.mode == "ranking":
+        try:
+            agg_codes, n_economies, _u = fetch_aggregate_codes()
+        except DataFetchError as e:
+            logging.error("取得失敗: %s", e)
+            return 1
         by_cc = latest_per_country(raw_rows)
-        out_rows = build_ranking(by_cc, args.top_n, args.indicator)
-        logging.info("各国最新値: %d か国", len(by_cc))
+        # ISO3 が空の行（所得階層の集計 High income 等は countryiso3code="" で返る）は順位に入らない。数を残す
+        no_iso3 = sorted({(r.get("country") or {}).get("value", "?") for r in raw_rows
+                          if not r.get("countryiso3code")})
+        if no_iso3:
+            logging.warning("ISO3 が空の行（集計）を除外: %s", no_iso3)
+        dropped = sorted(cc for cc in by_cc if cc in agg_codes)
+        for cc in dropped:
+            del by_cc[cc]
+        if dropped:
+            logging.warning("集計地域を順位から除外: %d 件 %s", len(dropped),
+                            dropped if len(dropped) <= 20 else dropped[:20] + ["…"])
+        n = len(by_cc)
+        if scope_kind == "all":
+            scope = f"集計地域を除く全{n_economies}か国・地域の中での順位（値のある{n}か国・地域）"
+        elif scope_kind == "default":
+            scope = f"既定{len(DEFAULT_COUNTRIES)}か国の中での順位（世界順位ではない。値のある{n}か国）"
+        else:
+            scope = f"指定した{len(countries)}か国の中での順位（値のある{n}か国）"
+        no_value = sorted(set(countries) - set(by_cc) - set(dropped)) if scope_kind != "all" else []
+        if args.top_n > n:
+            logging.warning("--top-n %d は母集団 %d か国より大きい（出力は %d 行）", args.top_n, n, n)
+        out_rows = build_ranking(by_cc, args.top_n, args.indicator, scope=scope)
+        years = [int(r["year"]) for r in out_rows]
+        extra = {
+            "scope": scope,
+            "n_ranked": n,
+            "dropped_aggregates": dropped,
+            "dropped_rows_without_iso3": no_iso3,
+            "countries_without_value": no_value,
+            "year_min": min(years) if years else None,
+            "year_max": max(years) if years else None,
+        }
+        logging.info("各国最新値: %d か国（%s）", n, scope)
+        if years and min(years) != max(years):
+            logging.warning("順位の中で年が揃っていない: %d〜%d 年", min(years), max(years))
     else:  # trend
         out_rows = build_trend(raw_rows, args.year_from)
         logging.info("時系列レコード: %d 行", len(out_rows))
@@ -322,14 +400,14 @@ def main() -> int:
     meta = save_metadata(
         out_meta, indicator=args.indicator, mode=args.mode, countries=countries,
         mrv=mrv, request_url=request_url, out_csv=out_csv,
-        row_count=len(out_rows),
+        row_count=len(out_rows), extra=extra,
     )
     logging.info("出力: %s (%d rows, sha256=%s…)",
                  out_csv, len(out_rows), meta["csv_sha256"][:12])
 
     # サマリ表示
     if args.mode == "ranking":
-        print(f"\n== World Bank {args.indicator} Top {args.top_n} ==")
+        print(f"\n== World Bank {args.indicator} Top {min(args.top_n, len(out_rows))} — {extra['scope']} ==")
         for r in out_rows[:min(20, len(out_rows))]:
             val = r["value"]
             v_str = f"{val:>18,.0f}" if val and val > 100 else f"{val:>18.3f}"

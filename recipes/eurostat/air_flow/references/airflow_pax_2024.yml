@@ -1,0 +1,18 @@
+# Eurostat 欧州・西アジア・アフリカ間 航空旅客フロー 2024 — リファレンス値
+# 単位は「千人/年(双方向)」。生passengers(×1000誤り)を value_within_range で検出する。
+fetch_args: "--measure pax --year 2024"
+
+expected:
+  row_count_min: 100
+  area_column: "route"
+  value_column: "pax_thousand"
+  top1_area: "DE-TR"          # 2024年の最大（2026-10-26 再取得でも同じ）
+  must_include_in_top5:
+    - "DE-TR"
+    - "UK-TR"
+    - "FR-MA"
+  must_not_include_anywhere:
+    - "TR-TR"                 # 国内線混入の検出（除外されているべき）
+  value_descending: true
+  value_within_range:
+    pax_thousand: {min: 0, max: 60000}   # max>60000千人 なら /1000 漏れ＝単位誤り

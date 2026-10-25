@@ -5,7 +5,7 @@ task: 国別・電源別の年次発電量取得（1990–）
 items: [発電量, 電源別発電量, 火力内訳, 化石一括]
 tags: [iea, electricity, generation, by-source, country-level, data-browser, ttl-cache, free]
 summary: IEA Energy Statistics Data Browser から指定国の電源別年次発電量（TWh, 1990–）を無料取得
-verified_at: 2026-06-22
+verified_at: 2026-10-26   # 何を測ったかは references/measured_20261026.md
 complexity: medium
 auth_required: false
 data_size_mb: 1  # 国あたり数百KBの JSON
@@ -23,7 +23,7 @@ IEA のエネルギー統計データブラウザ（＝Webで「CSVダウンロ�
 - **URL**: `https://api.iea.org/stats?series=ELECTRICITYANDHEAT&countries=<CODE>`
 - **認証**: 不要（無料・データブラウザのバックエンド。手動CSVダウンロードと同一データ）
 - **形式**: JSON 配列。1行 = 国×年×flow×product。`product="ELECTR"`（電力）を抽出（"HEAT" は熱）
-- **年範囲**: **1990–（当年-2 程度まで確定）**。この経路の下限は 1990 年
+- **年範囲**: **1990–**。2026-10 の実測で 1990〜2025 が返り、1989年以前の行は無い（references/measured_20261026.md）。**最新年は電源の行が欠けることがある**（JAPAN の 2025年）。`year` は文字列で返る
 - **単位**: 原系列は **GWh** → 本レシピで **TWh** に換算（/1000）
 - **TTL**: 国別 JSON を mtime ベースでキャッシュ（default 30日）
 
@@ -54,18 +54,21 @@ python fetch.py --countries JAPAN --output-dir ./output
 
 | 国 | コード | 国 | コード |
 |---|---|---|---|
-| 米国 | `USA`（✕`UNITEDSTATES`＝地域群に誤爆） | 日本 | `JAPAN` |
+| 米国 | `USA`（✕`UNITEDSTATES`＝全件が返る） | 日本 | `JAPAN` |
 | フランス | `FRANCE` | ドイツ | `GERMANY`（✕`DEUTHERY`/`DEUTSCHLAND`） |
 | デンマーク | `DENMARK` | スウェーデン | `SWEDEN` |
-| 英国 | `UNITEDKINGDOM` | 中国 | `CHINA` |
+| 英国 | `GBR`（✕`UNITEDKINGDOM`＝全件が返る） | 中国 | `CHINA` |
 | 韓国 | `KOREA` | インド | `INDIA` |
 
 不明な国は IEA データブラウザの URL で確認してから使う（`fetch.py` は既知リスト外で warn を出す）。
 
 ### 1b. 正確性ガード（fetch.py 実装済）
-不正コードはエラーにならず**ゴミ応答**を返すことがある（内訳合計＞総生産 等、内部矛盾）。
-`fetch.py` は `_sanity_check` で「電源内訳の合計 > 総生産(EHINDPROD)×1.1」を検出して `DataFetchError` で落とす。
-**smoke test（構造検査）は通っても中身が壊れている事故**を防ぐための砦（検証はモデルでなくコードで）。
+不正コードはエラーにならず、**179か国＋WORLD の全件**（32.9MB）が返る（`UNITEDKINGDOM`・`UNITEDSTATES`・`DEUTHERY` で実測）。
+`fetch.py` は2段で落とす:
+1. 応答の `country` 列が1種類でなければ `DataFetchError`（全件が返ったことを直接見る）。
+2. `_sanity_check`: **重ならない電源の合計 ＝ 総生産(EHINDPROD)** を年ごとに**両側**で確かめる（許容 1%）。
+   実測の差は最大 0.02%（USA・GBR・DENMARK・JAPAN の1990〜2025）。過大にも過小にも外れたら落とす。
+どちらも、確かめたのはこの4か国。ほかの国で恒等式が崩れたら、許容を広げる前に電源の定義を確かめる。
 
 ### 2. product="ELECTR" でフィルタ（電力 ≠ 熱）
 同じエンドポイントに熱（HEAT）の行も混在。発電量が欲しいなら **`product=="ELECTR"` 必須**。
@@ -78,15 +81,20 @@ python fetch.py --countries JAPAN --output-dir ./output
 | `EHNATGAS` | 天然ガス | `EHBIOMASS` | バイオ燃料 |
 | `EHNUCLEAR` | 原子力 | `EHGEOTHERM` | 地熱 |
 | `EHYDRO` | 水力 | `ETIDE` | 潮汐 |
-| `EHMUNWASTR` | 再生可能廃棄物 | `EHINDPROD` | **総生産（合計）** |
+| `EHMUNWASTR` | 都市廃棄物（再生可能分） | `EHINDPROD` | **総生産（合計）** |
+| `EHMUNWAST` | 都市廃棄物（全体） | `EHWASTE` | 廃棄物（全体） |
+| `EHSOLARTH` | 太陽熱発電 | `EHOTHER` | その他 |
 
 化石一括 = `EHCOAL+EHOIL+EHNATGAS`。`EHINDPROD` が総発電量（gross）。
+★**廃棄物は入れ子**: `EHWASTE` ⊃ `EHMUNWAST` ⊃ `EHMUNWASTR`。3つを積み上げると二重に数える（実測で DENMARK は総生産を最大 9.3% 超えた）。
 
 ### 4. 単位は GWh（→TWh換算必須）
 `value` は GWh。教材は TWh が多いので /1000。metadata に明記する。
 
-### 5. null は欠損（0埋めしない）
-`value=null` の行あり → skip。0 と欠損を混同しない（CLAUDE.md 規約）。
+### 5. null は欠損（0埋めしない）。行が無い電源も空欄
+`value=null` の行あり → 空欄。0 と欠損を混同しない（CLAUDE.md 規約）。
+★応答に**行そのものが無い**電源がある（DENMARK の原子力は全年、JAPAN の原子力は 2014年だけ）。JAPAN 2014 は原子炉が全て止まっていた年で、行が無い＝0 の意味のことがある。
+`fetch.py` はどちらも空欄で出し、metadata の `missing_values`（null の件数・応答に無い電源・行の無い電源がある年）に記録する。0 にするかは図を作る側が決め、注に書く。
 
 ### 6. gross（総生産）であること / OWID との差
 - IEA は **gross（総生産 EHINDPROD）**。OWID `electricity_generation` は gross だが**分散型太陽光推計込み**で太陽光がやや大きい。
@@ -94,12 +102,13 @@ python fetch.py --countries JAPAN --output-dir ./output
 - **混在禁止**: 定義差で段差が出る。**ソースは IEA なら IEA で統一**する。
 
 ### 7. 残差「その他」の作り方（積み上げ図）
-電源を積み上げると `EHMUNWAST`（非再生廃棄物）・`EHWASTE`・`EHOTHER`・統計差が残る。
-`その他 = EHINDPROD − 計上分（>=0）` で吸収し、metadata に内訳を明記する。
+`EHMUNWASTR` を再エネとして積むなら、残りは `EHWASTE − EHMUNWASTR`（再生可能でない廃棄物）・`EHSOLARTH`・`EHOTHER`。
+`その他 = EHINDPROD − 計上分（>=0）` で吸収し、metadata に内訳を明記する。計上分に廃棄物を2つ以上入れない（上の入れ子）。
 
 ### 8. デンマーク等の早期年
-IEA系列は全国 **1990年始まり**（それ以前は無い）。ただし 1990 以降は化石内訳も欠損なく揃う
-（OWIDは1985–だがデンマークの化石内訳が1985–89欠損→アーティファクト。IEAは構造的に発生しない）。
+IEA系列は **1990年始まり**（それ以前は無い。4か国で実測）。1990 以降の化石内訳（石炭・石油・天然ガス）は、
+実測した USA・GBR・DENMARK・JAPAN では全年に行がある（OWIDは1985–だがデンマークの化石内訳が1985–89欠損→アーティファクト）。
+ほかの国は `missing_values` で確かめる。
 
 ## 効くケース
 - 電源別発電量の長期推移（1990–）を**IEA一次データで**作りたい（出典をIEAに統一）
@@ -121,11 +130,11 @@ IEA系列は全国 **1990年始まり**（それ以前は無い）。ただし 1
 - ✅ パスは `Path(__file__)` / 引数基点、ハードコード絶対パスなし
 - ✅ ファイルI/O `encoding="utf-8"` / `sys.stdout.reconfigure`
 - ✅ 構造化例外 `DataFetchError` / リトライ3回 / TTLキャッシュ
-- ✅ metadata.json に source URL / SHA256 / row_count / 単位 / 欠損処理
+- ✅ metadata.json に source URL / SHA256 / row_count / 単位 / 欠損処理 / 範囲（`scope`）/ 欠損の記録 / 検算
 - ✅ APIキー不要 / Python 3.9 互換（`X | None` を使わない）
 
 ## このレシピを使うLLMへのヒント
-1. **国コードは大文字フルネーム＋`countries=`（複数形）** を疑え（`UNITEDSTATES`誤爆・`USA`正）
+1. **国コードは大文字フルネーム＋`countries=`（複数形）** を疑え（`UNITEDSTATES`・`UNITEDKINGDOM` は全件が返る。`USA`・`GBR` が正）
 2. **product="ELECTR" と flow コード表** が無いと電源別にできない → recipe を見る
 3. **GWh→TWh** 換算と **gross/OWID差** を metadata に明記
 4. **混在禁止**: 図1枚は単一ソース（IEAならIEA）で。OWIDと年でつながない

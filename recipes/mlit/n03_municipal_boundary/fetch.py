@@ -20,6 +20,8 @@ muni_code で dissolve した GeoPackage を出力する。検証用に「面積
 - 都道府県境界（47面）→ 別レシピ `naturalearth/japan_prefectures`
 - 統計値の結合・地図描画 → 各プロジェクト側
 """
+from __future__ import annotations
+
 import argparse
 import hashlib
 import io
@@ -35,10 +37,14 @@ from pathlib import Path
 import httpx
 
 N03_BASE = "https://nlftp.mlit.go.jp/ksj/gml/data/N03"
-# N03 公開日（年→YYYYMMDD）。多くの年は 0101。
-MLIT_DATES = {2000: "20000101", 2005: "20050101", 2010: "20100101",
-              2015: "20150101", 2020: "20200101", 2021: "20210101",
-              2022: "20220101", 2023: "20230101", 2024: "20240101"}
+# N03 のファイル名の日付（年→基準日の表記）。国土数値情報の配布ページ
+# https://nlftp.mlit.go.jp/ksj/gml/datalist/KsjTmplt-N03-2024.html に載るファイル名から写した（2026-10-26）。
+# 2020年以降は YYYYMMDD、2019年以前は YYMMDD。2025 は同じ形の URL が 200 を返すことを確認。
+# 1年に複数版ある年（2007・2010 等）は、ここでは片方だけを入れている。表に無い年は止める（推測しない）。
+MLIT_DATES = {2000: "001001", 2010: "101001", 2015: "150101", 2016: "160101",
+              2017: "170101", 2018: "180101", 2019: "190101",
+              2020: "20200101", 2021: "20210101", 2022: "20220101",
+              2023: "20230101", 2024: "20240101", 2025: "20250101"}
 EQUAL_AREA_CRS = "EPSG:6933"  # World Cylindrical Equal Area（面積算出用, m²）
 
 
@@ -56,9 +62,14 @@ def sha256_of(path: Path) -> str:
     return h.hexdigest()
 
 
-def download_n03(pref_code: str, year: int, retries: int = 3, timeout: int = 120):
-    """N03 zip を取得し、bytes を返す。"""
-    date_str = MLIT_DATES.get(year, f"{year}0101")
+def download_n03(pref_code: str, year: int, date_str: str | None = None,
+                 retries: int = 3, timeout: int = 120):
+    """N03 zip を取得し、(bytes, url) を返す。日付は MLIT_DATES か --date。推測はしない。"""
+    date_str = date_str or MLIT_DATES.get(year)
+    if not date_str:
+        raise DataFetchError(source="MLIT N03", url=N03_BASE, kind="UNKNOWN_DATE",
+                             message=(f"{year}年のファイル名の日付が表に無い。配布ページで確かめて "
+                                      "--date で渡す（推測で URL を作らない）"))
     url = f"{N03_BASE}/N03-{year}/N03-{date_str}_{pref_code}_GML.zip"
     last_err = None
     for i in range(retries):
@@ -77,6 +88,7 @@ def download_n03(pref_code: str, year: int, retries: int = 3, timeout: int = 120
 def load_municipalities(zip_bytes: bytes, url: str):
     """zip 内 shapefile を cp932 で読み、muni_code で dissolve した GeoDataFrame を返す。"""
     import geopandas as gpd
+    import pandas as pd
     from shapely import make_valid
 
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
@@ -94,12 +106,24 @@ def load_municipalities(zip_bytes: bytes, url: str):
     if "muni_code" not in gdf.columns:
         raise DataFetchError(source="MLIT N03", url=url, kind="NO_MUNI_CODE",
                              message=f"N03_007 列がありません: {list(gdf.columns)}")
-    gdf["muni_code"] = gdf["muni_code"].astype(str).str.zfill(5)
-    # 行政コードが5桁数字でない行（所属未定地など）を除外
-    gdf = gdf[gdf["muni_code"].str.match(r"^\d{5}$")].copy()
+    gdf["muni_code_raw"] = gdf["muni_code"]
+    gdf["muni_code"] = (gdf["muni_code"].astype(str).str.strip()
+                        .str.replace(r"\.0$", "", regex=True).str.zfill(5))
+    # 行政コードが5桁数字でない行（所属未定地など）を除外し、外した行を記録する
+    ok = gdf["muni_code"].str.match(r"^\d{5}$")
+    dropped = (pd.DataFrame({"N03_007": gdf.loc[~ok, "muni_code_raw"].fillna("(空)").astype(str).values,
+                             "CITY_NAME": gdf.loc[~ok, "CITY_NAME"].fillna("(空)").astype(str).values})
+               .value_counts(dropna=False).rename("rows").reset_index().to_dict("records"))
+    dropped = [{k: (int(v) if k == "rows" else v) for k, v in d.items()} for d in dropped]
+    gdf = gdf[ok].drop(columns=["muni_code_raw"]).copy()
+    # 同じ行政コードに別の名前が付いていないか（dissolve の first で黙って片方を選ばない）
+    names = gdf.groupby("muni_code")["CITY_NAME"].nunique(dropna=False)
+    if (names > 1).any():
+        raise DataFetchError(source="MLIT N03", url=url, kind="NAME_CONFLICT",
+                             message=f"同じ行政コードに複数の名前: {names[names > 1].index.tolist()}")
     gdf["geometry"] = gdf.geometry.apply(make_valid)
     muni = gdf.dissolve(by="muni_code", aggfunc="first").reset_index()
-    return muni.to_crs("EPSG:4326")
+    return muni.to_crs("EPSG:4326"), {"n_rows_raw": int(len(ok)), "dropped_invalid_code_rows": dropped}
 
 
 def write_manifest(muni, csv_path: Path) -> int:
@@ -128,7 +152,9 @@ def main() -> int:
     ap.add_argument("--pref-code", default="15",
                     help="都道府県コード2桁 (例 13=東京, 15=新潟)。default 15")
     ap.add_argument("--year", type=int, default=2020,
-                    help="N03 公開年 (default 2020)")
+                    help="N03 の版の年 (default 2020)")
+    ap.add_argument("--date", default=None,
+                    help="ファイル名の日付（MLIT_DATES に無い年・複数版ある年に使う。例 110331）")
     ap.add_argument("--output-dir", type=Path, default=Path("./output"))
     ap.add_argument("--cache-dir", type=Path,
                     default=Path.home() / ".cache" / "n03")
@@ -145,27 +171,37 @@ def main() -> int:
     gpkg = args.output_dir / f"n03_municipal_{pref}_{args.year}.gpkg"
     cache_gpkg = args.cache_dir / f"muni_{pref}_{args.year}.gpkg"
 
-    if cache_gpkg.exists():
+    cache_meta = cache_gpkg.with_suffix(".json")
+    if cache_gpkg.exists() and cache_meta.exists():
         logging.info("キャッシュ使用: %s", cache_gpkg)
         muni = gpd.read_file(cache_gpkg)
-        src_url = f"{N03_BASE}/N03-{args.year}/(cached)"
+        cinfo = json.loads(cache_meta.read_text(encoding="utf-8"))
+        cinfo["from_cache"] = True
     else:
         try:
-            zip_bytes, src_url = download_n03(pref, args.year)
+            zip_bytes, src_url = download_n03(pref, args.year, args.date)
+            muni, load_info = load_municipalities(zip_bytes, src_url)
         except DataFetchError as e:
-            logging.error("ダウンロード失敗: %s", e)
+            logging.error("%s", e)
             return 1
-        muni = load_municipalities(zip_bytes, src_url)
+        cinfo = {"url": src_url, "zip_sha256": hashlib.sha256(zip_bytes).hexdigest(),
+                 "zip_bytes": len(zip_bytes),
+                 "downloaded_at": datetime.now(timezone.utc).astimezone().isoformat(),
+                 **load_info}
         muni[["muni_code", "PREF_NAME", "CITY_NAME", "geometry"]].to_file(
             cache_gpkg, driver="GPKG")
+        cache_meta.write_text(json.dumps(cinfo, ensure_ascii=False, indent=1), encoding="utf-8")
+        cinfo["from_cache"] = False
 
-    # 自己検証: 市区町村が取れて、コードが県プレフィックスと一致
+    # 自己検証: 市区町村が取れて、コードが県プレフィックスと一致（混入したら止める）
     if len(muni) == 0:
         logging.error("市区町村が0件です")
         return 1
     bad = muni[~muni["muni_code"].astype(str).str.startswith(pref)]
     if len(bad) > 0:
-        logging.warning("県コード %s 以外の muni_code が %d 件混入", pref, len(bad))
+        logging.error("県コード %s 以外の muni_code が %d 件: %s", pref, len(bad),
+                      bad["muni_code"].tolist()[:10])
+        return 1
 
     muni[["muni_code", "PREF_NAME", "CITY_NAME", "geometry"]].to_file(
         gpkg, driver="GPKG")
@@ -174,24 +210,38 @@ def main() -> int:
     meta_path = args.output_dir / f"{today}_n03_municipal_{pref}_{args.year}_metadata.json"
     n = write_manifest(muni, csv_path)
 
+    is_ku = muni["CITY_NAME"].astype(str).str.endswith("区")
+    tokubetsu = muni["muni_code"].astype(str).str.match(r"^131\d\d$")  # 東京23区は区そのものが市町村
+    n_ward = int((is_ku & ~tokubetsu).sum())
+    n_drop = sum(d["rows"] for d in cinfo.get("dropped_invalid_code_rows", []))
+    scope = (f"都道府県コード {pref} の行政コード（muni_code）{n}件すべて。"
+             f"政令市は区ごとに1件（政令市の区 {n_ward}件）で、市そのものの行は無い。"
+             f"行政コードが5桁数字でない行 {n_drop}行（所属未定地など）は除外")
     meta = {
         "task_name": f"n03_municipal_{pref}_{args.year}",
-        "source": {"name": "国土数値情報 行政区域 N03", "url": src_url,
-                   "single_source": True},
+        "source": {"name": "国土数値情報 行政区域 N03", "url": cinfo["url"],
+                   "zip_sha256": cinfo["zip_sha256"], "downloaded_at": cinfo["downloaded_at"],
+                   "from_cache": cinfo["from_cache"], "single_source": True},
         "crs": "EPSG:4326",
-        "query": {"pref_code": pref, "year": args.year},
+        "query": {"pref_code": pref, "year": args.year,
+                  "file_date": cinfo["url"].rsplit("N03-", 1)[-1].split("_")[0]},
+        "scope": scope,
         "fetched_at": datetime.now(timezone.utc).astimezone().isoformat(),
         "municipality_count": n,
+        "municipality_count_definition": "muni_code のユニーク数（政令市は区を1件と数え、市本体は含まない）",
+        "n_rows_raw": cinfo.get("n_rows_raw"),
+        "dropped_invalid_code_rows": cinfo.get("dropped_invalid_code_rows"),
         "gpkg_sha256": sha256_of(gpkg),
         "csv_sha256": sha256_of(csv_path),
-        "notes": ("N03 属性は cp932。N03_007=行政コードで dissolve。5桁数字でない行は除外。"
-                  "面積は EPSG:6933(equal-area)で算出した 平方km。"),
+        "notes": ("N03 属性は cp932。N03_007=行政コードで dissolve（同じコードに別名があれば止める）。"
+                  "面積は EPSG:6933(equal-area)で算出した 平方km。ファイル名の日付は基準日の表記。"),
     }
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
                          encoding="utf-8")
-    logging.info("出力: %s (%d市区町村)", gpkg.name, n)
+    logging.info("出力: %s (muni_code %d件・区を含む)", gpkg.name, n)
 
-    print(f"\n== N03 市区町村境界 {pref} ({args.year}) {n}市区町村 ==")
+    print(f"\n== N03 市区町村境界 {pref} ({args.year}) muni_code {n}件 ==")
+    print(f"  範囲: {scope}")
     print(f"  GPKG: {gpkg}")
     print("  面積トップ5(平方km):")
     import csv as _csv

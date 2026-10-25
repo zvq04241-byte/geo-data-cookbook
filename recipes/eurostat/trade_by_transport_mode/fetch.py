@@ -26,8 +26,9 @@ DIR = "comext/COMEXT_DATA/TRANSPORT_HS"
 UA = {"User-Agent": "Mozilla/5.0"}
 EU27 = {"AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU",
         "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"}
-# ★国ではない特殊コード。QS は船舶・航空機への積込み（bunkers and stores）
-SPECIAL = {"QR", "QS", "QU", "QV", "QW", "QX", "QY", "QZ"}
+# ★国ではない特殊コード（Comext の PARTNERS_ISO.txt。references/comext_PARTNERS_ISO_20261026.txt）。
+#   QS は船舶・航空機への積込み（Stores and provisions）、QP は公海（High Seas）。QA はカタールで国なので入れない
+SPECIAL = {"QP", "QQ", "QR", "QS", "QU", "QV", "QW", "QX", "QY", "QZ"}
 MODE = {"1": "海上", "2": "鉄道", "3": "道路", "4": "航空", "5": "郵便",
         "7": "固定施設", "8": "内陸水路", "9": "自走", "0": "その他"}
 ORDER = ["海上", "航空", "道路", "鉄道", "内陸水路", "固定施設", "自走", "郵便", "その他"]
@@ -75,11 +76,14 @@ def aggregate(dat, reporters, flow, scope, exclude):
     want = {"export": "2", "import": "1"}[flow]
     agg = defaultdict(lambda: defaultdict(lambda: [0.0, 0.0]))
     miss = defaultdict(lambda: [0, 0])          # 重量の欠測を数える
+    raw = defaultdict(float)                     # 除外前の合計（完全性の検査で公表の域外計と比べる）
     with dat.open(newline="") as f:
         for r in csv.DictReader(f):
             rep = r["REPORTER"]
             if rep not in reporters or r["FLOW"] != want: continue
             if r["PRODUCT"] != "TOTAL": continue
+            try: raw[rep] += float(r["VALUE_EUR"] or 0)
+            except ValueError: pass
             p = r["PARTNER"]
             if p in SPECIAL: continue
             # ★このファイルは域外のみ。EU27 判定は保険（年によって加盟国が違うため）
@@ -93,7 +97,31 @@ def aggregate(dat, reporters, flow, scope, exclude):
             if q in ("", "0"): m[1] += 1
             agg[rep][b][0] += v
             agg[rep][b][1] += float(q) if q not in ("", "0") else 0.0
-    return agg, miss
+    return agg, miss, raw
+
+
+FILE_TO_API = {"GR": "EL"}      # Comext バルクはギリシャを GR、dissemination API は EL
+
+
+def official_extra_totals(year, flow):
+    """公表の域外貿易額（ext_lt_intratrd・百万EUR）。報告国ごとの完全性の検査の相手。"""
+    ind = {"export": "MIO_EXP_VAL", "import": "MIO_IMP_VAL"}[flow]
+    url = ("https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/ext_lt_intratrd"
+           f"?format=JSON&lang=EN&time={year}&indic_et={ind}&sitc06=TOTAL&partner=EXT_EU27_2020")
+    r = httpx.get(url, headers=UA, timeout=120); r.raise_for_status(); d = r.json()
+    inv = {v: k for k, v in d["dimension"]["geo"]["category"]["index"].items()}
+    return {inv[int(k)]: v * 1e6 for k, v in d.get("value", {}).items()}, d.get("updated")
+
+
+def notices():
+    """COMEXT_DATA と TRANSPORT_HS の「Important Note」の名前（欠測・改訂の告知。時期で入れ替わる）"""
+    out = []
+    for dd in ("comext/COMEXT_DATA", DIR):
+        r = httpx.get(BASE, params={"dir": dd}, headers=UA, timeout=120, follow_redirects=True)
+        if r.status_code != 200: out.append(f"{dd}: 一覧を取れない HTTP{r.status_code}"); continue
+        txt = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", r.text)).split())
+        out += re.findall(r"Important Note[^.]*?\.txt", txt)
+    return out
 
 
 def main():
@@ -104,7 +132,11 @@ def main():
     ap.add_argument("--scope", choices=["extra", "all"], default="extra",
                     help="★TRANSPORT_HS は域外のみ。域内は TRANSPORT_NST07 側にある")
     ap.add_argument("--exclude-partner", default="",
-                    help="相手国を除く。原問が「EUにイギリスを含む」ならGB")
+                    help="相手国を除く。旧定義（EUにイギリスを含む）に合わせるならGB")
+    ap.add_argument("--tolerance", type=float, default=3.0,
+                    help="完全性の検査: 報告国の合計が公表の域外計から何%%ずれたら止めるか")
+    ap.add_argument("--allow-incomplete", action="store_true",
+                    help="完全性の検査に落ちた報告国・ファイルに無い報告国があっても出力する（scope と metadata に残る）")
     ap.add_argument("--list-years", action="store_true")
     ap.add_argument("--output-dir", type=Path, default=Path("./output"))
     ap.add_argument("--cache-dir", type=Path,
@@ -120,22 +152,56 @@ def main():
     reporters = [x.strip().upper() for x in a.reporters.split(",") if x.strip()]
     exclude = {x.strip().upper() for x in a.exclude_partner.split(",") if x.strip()}
     dat = download(a.year, a.cache_dir)
-    agg, miss = aggregate(dat, set(reporters), a.flow, a.scope, exclude)
+    agg, miss, raw = aggregate(dat, set(reporters), a.flow, a.scope, exclude)
+
+    # ★完全性の検査: 国ごとの欠測は実在する（COMEXT_DATA に欠測の告知が出ることがある）。
+    #   報告国ごとに、ファイルの TOTAL 行の合計（除外前）を公表の域外計（ext_lt_intratrd）と比べる。
+    #   2020年以前はファイルが英国を域内とする定義なので、EU27_2020 の域外計とは比べられない。
+    missing = [r for r in reporters if r not in agg]
+    check, bad = {}, []
+    if a.year >= 2021:
+        off, upd = official_extra_totals(a.year, a.flow)
+        for rep in reporters:
+            o = off.get(FILE_TO_API.get(rep, rep))
+            if o is None or rep in missing:
+                check[rep] = {"file_eur": raw.get(rep, 0), "official_eur": o, "diff_pct": None}
+                bad.append(rep); continue
+            dpc = round((raw[rep] / o - 1) * 100, 2)
+            check[rep] = {"file_eur": raw[rep], "official_eur": o, "diff_pct": dpc}
+            if abs(dpc) > a.tolerance: bad.append(rep)
+        check_note = f"ext_lt_intratrd（{a.flow}, EXT_EU27_2020, updated {upd}）と比較。許容 ±{a.tolerance}%"
+    else:
+        bad = list(missing)
+        check_note = "2020年以前はファイルの定義（英国＝域内）が公表の EU27_2020 域外計と違うため比較していない"
+    for rep, c in check.items():
+        print(f"   完全性 {rep}: ファイル {c['file_eur']/1e9:.2f} / 公表 "
+              + (f"{c['official_eur']/1e9:.2f} 十億EUR（差 {c['diff_pct']}%）" if c['official_eur'] else "なし"),
+              file=sys.stderr)
+    nts = notices()
+    if nts: print("   告知: " + " / ".join(nts), file=sys.stderr)
+    if bad and not a.allow_incomplete:
+        raise SystemExit(f"★完全性の検査に落ちた報告国: {bad}（ファイルに無い: {missing}）。"
+                         "告知を読み、使うなら --allow-incomplete（scope に残る）")
+    scope = (f"報告国{len(reporters)}か国を要求（出力できたのは{len(reporters) - len(missing)}"
+             + (f"。ファイルに無い: {','.join(missing)}" if missing else "")
+             + (f"。完全性の検査に落ちた: {','.join(b for b in bad if b not in missing)}" if [b for b in bad if b not in missing] else "")
+             + f"）。相手国={'域外' if a.scope == 'extra' else '全部'}"
+             + (f"、{','.join(sorted(exclude))}を除く" if exclude else "") + "。Q*（積込み等）は除く")
 
     rows = []
     for rep in reporters:
         d = agg.get(rep)
         if not d:
-            print(f"   {rep}: 該当なし", file=sys.stderr); continue
+            print(f"   {rep}: ファイルに無い", file=sys.stderr); continue
         TV = sum(x[0] for x in d.values()); TQ = sum(x[1] for x in d.values())
         for b in ORDER:
             if b not in d: continue
             n, mq = miss[(rep, b)]
-            rows.append({"報告国": rep, "年": a.year, "flow": a.flow, "scope": a.scope,
+            rows.append({"報告国": rep, "年": a.year, "flow": a.flow, "相手国の範囲": a.scope,
                          "除外相手国": ",".join(sorted(exclude)) or "-", "輸送手段": b,
                          "額_EUR": int(d[b][0]), "額_%": round(d[b][0] / TV * 100, 2),
                          "重量_t": int(d[b][1] / 1000), "重量_%": round(d[b][1] / TQ * 100, 2),
-                         "重量欠測_%": round(mq / n * 100, 1) if n else 0.0})
+                         "重量欠測_%": round(mq / n * 100, 1) if n else 0.0, "scope": scope})
     if not rows: raise SystemExit("0件。--reporters と --year を見直す")
 
     a.output_dir.mkdir(parents=True, exist_ok=True)
@@ -145,10 +211,13 @@ def main():
         w = csv.DictWriter(f, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
     (p.with_name(p.stem + "_metadata.json")).write_text(json.dumps({
         "source": "Eurostat Comext bulk / COMEXT_DATA/TRANSPORT_HS",
-        "file": dat.name, "year": a.year, "flow": a.flow, "scope": a.scope,
+        "file": dat.name, "year": a.year, "flow": a.flow, "partner_scope": a.scope, "scope": scope,
+        "reporters_requested": reporters, "reporters_missing": missing,
+        "completeness_check": check, "completeness_note": check_note, "completeness_failed": bad,
+        "notices": nts,
         "note": "PRODUCT=TOTAL の行のみ集計（品目別と混ぜると二重計上）。"
                 "相手国コード Q* は国ではないので除外（QS=船舶・航空機への積込み）。"
-                "★英国は2021年から域外。原問の年の定義に合わせること",
+                "★英国は2021年から域外。比べる相手の年の定義に合わせること",
         "excluded_partners": sorted(exclude), "rows": len(rows),
         "csv_sha256": hashlib.sha256(p.read_bytes()).hexdigest(),
         "retrieved_at": datetime.now(JST).isoformat()}, ensure_ascii=False, indent=2),

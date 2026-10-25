@@ -5,7 +5,7 @@ task: 都市化度（Degree of Urbanization）国別ランキング
 tags: [un_wup, urbanization, degree-of-urbanization, ranking, country-level, bulk-download, xlsx, single-year]
 summary: UN WUP 2025 の Degree of Urbanization バルクxlsxから、指定年・カテゴリの国別%で上位N国を取得
 items: [Cities and Towns, Cities, Towns, Rural]
-verified_at: 2026-06-08
+verified_at: 2026-10-26
 complexity: easy
 auth_required: false
 data_size_mb: 1
@@ -17,13 +17,15 @@ pattern: bulk-xlsx-download + openpyxl + type-code-country-filter
 
 ## 何をする
 UN World Urbanization Prospects 2025 の "Degree of Urbanization" バルク xlsx（F02=%, F01=人口）から、
-指定年・カテゴリ（Cities and Towns 等）の**国別 %** を取得し、上位N国を CSV + metadata.json に出力する。
+指定年・カテゴリ（Cities and Towns 等）の**国・地域別 %** を取得し、上位Nを CSV + metadata.json に出力する。
+順位は **LocType==4（country or area）全237件の中で**付ける（既定の国リストは使わない）。非主権地域を含むので、
+metadata の `scope` に「非主権地域を含む」と書く。2025年の上位7は Gibraltar・Holy See・Monaco・Singapore・マカオ・香港・Bermuda（下の3）。
 
 ## API情報
 - **出典**: UN WUP 2025 — Degree of Urbanization（Countries and Aggregates）
 - **URL**: `https://population.un.org/wup/assets/Download/Countries%20and%20Aggregates/WUP2025-F02-Degree-of-Urbanization_percPop_by_category.xlsx`（F01=絶対人口）
 - **認証**: 不要
-- **データ規模**: xlsx 約1MB
+- **データ規模**: xlsx 約1MB（F02 1,077,514 バイト / F01 1,704,537 バイト）
 - **形式**: xlsx（複数シート: Cities and Towns / Cities / Towns / Rural）
 
 ## 使い方
@@ -42,17 +44,21 @@ python fetch.py --year 2025 --top-n 20 --cache <path-to.xlsx> --output-dir ./out
 ### 1. 「Cities and Towns %」は従来の都市人口率とは別物（最重要）
 DEGURBA（人口密度グリッド分類）の「Cities and Towns %」= **非Rural人口の割合**で、
 従来の UN「urban/rural」定義の都市化率とは数値が大きく異なる。
-実例（2025）: **Bangladesh 98.0% / Egypt 97.5%** — 従来定義ではバングラ約40%。
+実例（2025, F02 の Cities and Towns シート）: **Bangladesh 98.0% / Egypt 97.5%**。
+従来定義（World Bank WDI `SP.URB.TOTL.IN.ZS`、保管庫の WDI_CSV.zip）では 2024年に Bangladesh 32.7% / Egypt 42.8%（2026-10-26 に保管庫から読んだ値）。
 教材で「都市化率」と説明するとき、どちらの定義かを必ず明示する。混同は致命的。
 
-### 2. 集計地域の除外は種別コード row[7]==4 で行う
+### 2. 集計地域の除外は種別コード row[7]==4 で行う（列の見出しも確かめる）
 Area 列には国だけでなく World / 地域（Asia 等）/ 所得グループが混在する。
 **`row[7]（種別コード）== 4` の行だけ**が「国・地域」。これを外すと集計値がランキングに混入する。
 （FAOSTAT の AGG_AREAS 除外、WPP の LocTypeID と同じ構造の罠。）
+列は固定オフセットで読むので、fetch.py は `check_header()` で 1=Location・4=ISO3_Code・7=LocType・8=LocTypeName・10=1950 を確かめ、
+違えば止まる（2026-10-26、F01・F02 とも一致。種別コードの内訳は 4:237 / 14:23 / 3:21 / 13:16 / 12:10 / 5:7 / 2:7 / 25:5 / 1:1）。
 
 ### 3. type==4 は非主権地域も含む
 コード4は「country or area」で、**Gibraltar / China, Macao SAR / China, Hong Kong SAR / Bermuda /
-Sint Maarten / Aruba / Holy See** 等の非主権地域も含む。これらは都市化度ほぼ100%で上位を占める。
+Sint Maarten / Aruba / Holy See** 等の非主権地域も含む。2025年の Cities and Towns % では
+Gibraltar 100 / Holy See 100 / Monaco 100 / Singapore 99.9 / マカオ 99.9 / 香港 99.6 / Bermuda 98.5 が1〜7位（2026-10-26 実行）。
 「主権国家だけ」のランキングが欲しい場合は、別途 ISO3 ホワイトリスト等で絞る必要がある（本レシピは未絞り）。
 
 ### 4. 年列は index 10 以降・ヘッダ値を直接スキャンして引く
@@ -69,15 +75,18 @@ Sint Maarten / Aruba / Holy See** 等の非主権地域も含む。これらは�
 シート名を取り違えても例外は出ず、別カテゴリの数値が返るだけ。`--category` の対応を固定する。
 
 ### 7. F02=percent / F01=population の取り違え
-F02 が割合(%)、F01 が絶対人口(千人)。ファイルを取り違えると単位が狂う。`--indicator` と FILE_MAP を一致させる。
+F02 が割合(%)、F01 が絶対人口(千人。各ファイルの info シートの表題に "(per cent)" / "(thousands)" とある)。
+ファイルを取り違えると単位が狂う。`--indicator` と FILE_MAP を一致させる。percent で 0〜100 の外の値が出たら fetch.py は止まる
+（F01 を percent として読ませると Burundi 12836.094 で止まることを確認）。
 
 ### 8. 2025 超の年は推計値
-WUP は将来推計を含む。`--year > 2025` は観測でなく projection。metadata の `is_projection` で明示する。
+WUP 2025 は 1950〜2050年を収録し、将来推計を含む。fetch.py は `--year > 2025` を推計として警告し、metadata の `is_projection` に書く。
+推計の開始年は info シートに書かれていない（2025年を境にしているのは fetch.py の設定。確かめるなら WUP の方法論文書を見る）。
 
 ## 効くケース
 - 単一年 × カテゴリ（Cities and Towns 等）× 国別 % の上位N
 - `--indicator population` で絶対人口（千人, F01）ランキングにも切替可
-- `--min-percent` でしきい値フィルタ
+- `--min-value`（旧名 `--min-percent`）でしきい値フィルタ。`--indicator` の単位（% か千人）で比べる
 
 ## 効かないケース（別レシピ推奨）
 | 要求 | 推奨 | 状態 |
