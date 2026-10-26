@@ -411,7 +411,7 @@ def main() -> int:
 
     # サマリ表示
     if args.mode == "ranking":
-        print(f"\n== World Bank {args.indicator} Top {min(args.top_n, len(out_rows))} — {extra['scope']} ==")
+        print(f"\n== World Bank {args.indicator} Top {min(args.top_n, len(out_rows))} ― {extra['scope']} ==")
         for r in out_rows[:min(20, len(out_rows))]:
             val = r["value"]
             v_str = f"{val:>18,.0f}" if val and val > 100 else f"{val:>18.3f}"

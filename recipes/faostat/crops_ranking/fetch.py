@@ -337,7 +337,7 @@ def main() -> int:
 
     # ─── 結果サマリ ───
     print(f"\n== FAOSTAT {args.item} {args.element} Top {args.top_n} ({args.year}) "
-          f"— {meta['scope']} ==")
+          f"― {meta['scope']} ==")
     for _, row in df.iterrows():
         mark = "＊" if row["estimated"] else "  "
         print(f"  {row['Rank']:>2}  {row['Area']:<35}  "

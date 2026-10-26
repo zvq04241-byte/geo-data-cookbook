@@ -311,7 +311,7 @@ def main() -> int:
     logging.info("出力: %s (%d rows, sha256=%s…)",
                  out_csv, len(ranked), meta["csv_sha256"][:12])
 
-    print(f"\n== ILO 製造業 時間賃金 Top {len(ranked)} ({args.currency}) — {scope} ==")
+    print(f"\n== ILO 製造業 時間賃金 Top {len(ranked)} ({args.currency}) ― {scope} ==")
     for r in ranked:
         print(f"  {r['rank']:>3}  {r['cc']:<4}  {r['hourly']:>7.2f}{unit}  "
               f"{r['year']}  {r['source']}")
